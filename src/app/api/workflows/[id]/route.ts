@@ -3,6 +3,8 @@ import { auth } from '@clerk/nextjs/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 
+export const dynamic = 'force-dynamic';
+
 const updateWorkflowSchema = z.object({
   name: z.string().min(1, 'Workflow name cannot be empty').optional(),
   nodes: z.array(z.any()).optional(),
@@ -44,6 +46,14 @@ export async function GET(
           where: {
             userId: userId,
             name: workflow.name,
+          },
+          include: {
+            runs: {
+              orderBy: { timestamp: 'desc' },
+              include: {
+                nodeExecutions: true,
+              },
+            },
           },
         });
 

@@ -35,24 +35,8 @@ export default function WorkflowBuilderPage() {
   const [isSaved, setIsSaved] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
 
-  // Sidebar states
   const [showSidebar, setShowSidebar] = useState(true);
-  const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([
-    {
-      id: 'run-1',
-      status: 'SUCCESS',
-      duration: '1.2s',
-      timestamp: new Date(Date.now() - 3600000).toLocaleTimeString(),
-      scope: 'FULL',
-    },
-    {
-      id: 'run-2',
-      status: 'SUCCESS',
-      duration: '0.9s',
-      timestamp: new Date(Date.now() - 7200000).toLocaleTimeString(),
-      scope: 'PARTIAL',
-    },
-  ]);
+  const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
 
   // --- INITIALIZE & LOAD CANVAS DATA ---
   useEffect(() => {
@@ -101,6 +85,19 @@ export default function WorkflowBuilderPage() {
 
           setNodes(sanitizedNodes || []);
           setEdges(loadedEdges || []);
+
+          if (data.runs && Array.isArray(data.runs)) {
+            const history = data.runs.map((r: any) => ({
+              id: r.id,
+              status: r.status as 'SUCCESS' | 'FAILED' | 'RUNNING',
+              duration: r.duration.toFixed(1) + 's',
+              timestamp: new Date(r.timestamp).toLocaleTimeString(),
+              scope: r.scope,
+            }));
+            setRunHistory(history);
+          } else {
+            setRunHistory([]);
+          }
         } catch (error) {
           console.error('Failed to load workflow:', error);
         } finally {
@@ -190,6 +187,21 @@ export default function WorkflowBuilderPage() {
     });
 
     try {
+      // Auto-save the current canvas state first so the backend gets the latest inputs
+      const saveRes = await fetch(`/api/workflows/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          nodes,
+          edges,
+        }),
+      });
+
+      if (!saveRes.ok) {
+        throw new Error('Failed to auto-save workflow state before execution');
+      }
+
       // 2. POST to trigger run API
       const res = await fetch('/api/workflows/run', {
         method: 'POST',
@@ -208,13 +220,20 @@ export default function WorkflowBuilderPage() {
       const runResponse = await res.json();
       const runId = runResponse.runId;
 
-      // 3. Start local interval to query run execution state from database
-      const intervalId = setInterval(async () => {
+      // 3. Start local recursive setTimeout polling
+      let isPollActive = true;
+      const poll = async () => {
+        if (!isPollActive) return;
         try {
           const statusRes = await fetch(`/api/runs/${runId}`);
-          if (!statusRes.ok) return;
+          if (!statusRes.ok) {
+            if (isPollActive) setTimeout(poll, 1500);
+            return;
+          }
 
           const runState = await statusRes.json();
+          if (!isPollActive) return;
+
           const executions = runState.nodeExecutions || [];
 
           // Map node execution statuses directly to React Flow store
@@ -245,7 +264,7 @@ export default function WorkflowBuilderPage() {
 
           // Check if overall run has completed
           if (runState.status === 'SUCCESS' || runState.status === 'FAILED') {
-            clearInterval(intervalId);
+            isPollActive = false;
             setIsExecuting(false);
 
             const durationStr = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
@@ -256,7 +275,10 @@ export default function WorkflowBuilderPage() {
               timestamp: new Date().toLocaleTimeString(),
               scope,
             };
-            setRunHistory((prev) => [finalRunHistoryItem, ...prev]);
+            setRunHistory((prev) => {
+              if (prev.some((item) => item.id === runId)) return prev;
+              return [finalRunHistoryItem, ...prev];
+            });
 
             // Set edges isRunning to false
             useWorkflowStore.setState({
@@ -278,16 +300,87 @@ export default function WorkflowBuilderPage() {
                 };
               }),
             });
+
+            // Schedule next poll
+            if (isPollActive) {
+              setTimeout(poll, 1500);
+            }
           }
         } catch (pollErr) {
           console.error('Error polling execution status:', pollErr);
+          if (isPollActive) {
+            setTimeout(poll, 1500);
+          }
         }
-      }, 1500);
+      };
+
+      // Start the recursive poll
+      setTimeout(poll, 1500);
 
     } catch (err) {
       console.error('Trigger workflow execution failed:', err);
       alert('Failed to start workflow execution.');
       setIsExecuting(false);
+    }
+  };
+
+  // --- RESET WORKFLOW OUTPUTS & INPUTS ---
+  const handleResetWorkflow = async () => {
+    if (isExecuting || isSaving) return;
+
+    // Reset visual nodes execution data locally
+    const resetNodes = nodes.map((node) => {
+      const updatedData = { ...node.data };
+
+      // Clear execution parameters and statuses
+      delete updatedData.duration;
+      delete updatedData.error;
+      updatedData.isRunning = false;
+
+      // Clear specific output properties depending on the node type
+      if (node.type === 'cropImage') {
+        updatedData.imageUrl = '';
+        updatedData.output = {};
+      } else if (node.type === 'gemini') {
+        updatedData.response = '';
+        updatedData.imageUrl = '';
+        updatedData.output = {};
+      } else if (node.type === 'response') {
+        updatedData.result = '';
+        updatedData.output = {};
+      }
+
+      return {
+        ...node,
+        data: updatedData,
+      };
+    });
+
+    setNodes(resetNodes);
+
+    // Save the reset state in the database immediately so that reloading does not restore old state
+    setIsSaving(true);
+    try {
+      const res = await fetch(`/api/workflows/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nodes: resetNodes,
+          edges,
+        }),
+      });
+
+      if (res.ok) {
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 2000);
+      } else {
+        alert('Failed to save reset state to the database.');
+      }
+    } catch (err) {
+      console.error('Error saving reset state:', err);
+      alert('Failed to save reset state.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -356,6 +449,15 @@ export default function WorkflowBuilderPage() {
 
         {/* CONTROLS BUTTONS */}
         <div className="flex items-center gap-3">
+          {/* Reset Button */}
+          <button
+            onClick={handleResetWorkflow}
+            disabled={isExecuting || isSaving}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 border border-zinc-200 hover:border-red-200 hover:bg-red-50/50 rounded-lg text-xs font-semibold text-red-650 transition-all disabled:opacity-50"
+          >
+            Reset Flow
+          </button>
+
           {/* Save Button */}
           <button
             onClick={handleSaveWorkflow}

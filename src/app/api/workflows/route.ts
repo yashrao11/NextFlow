@@ -3,6 +3,8 @@ import { auth, currentUser } from '@clerk/nextjs/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 
+export const dynamic = 'force-dynamic';
+
 const createWorkflowSchema = z.object({
   name: z.string().min(1, 'Workflow name is required and cannot be empty'),
 });

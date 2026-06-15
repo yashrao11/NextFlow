@@ -119,7 +119,38 @@ export function RequestInputsNode({ id, data }: NodeProps) {
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        handleValueChange(fieldId, reader.result as string);
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.naturalWidth || img.width;
+          let height = img.naturalHeight || img.height;
+          
+          const MAX_DIM = 1200;
+          if (width > MAX_DIM || height > MAX_DIM) {
+            if (width > height) {
+              height = Math.round((height * MAX_DIM) / width);
+              width = MAX_DIM;
+            } else {
+              width = Math.round((width * MAX_DIM) / height);
+              height = MAX_DIM;
+            }
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            handleValueChange(fieldId, jpegDataUrl);
+          } else {
+            handleValueChange(fieldId, reader.result as string);
+          }
+        };
+        img.onerror = () => {
+          handleValueChange(fieldId, reader.result as string);
+        };
+        img.src = reader.result as string;
       };
       reader.readAsDataURL(file);
     }
@@ -462,9 +493,9 @@ export function CropImageNode({ id, data }: NodeProps) {
 
         {/* Visual Crop selection overlay inside bounding box */}
         {resolvedInputImage ? (
-          <div className="relative w-full aspect-video bg-zinc-50 border border-zinc-200 rounded-lg overflow-hidden flex items-center justify-center mb-3">
+          <div className="relative w-full bg-zinc-50 border border-zinc-200 rounded-lg overflow-hidden mb-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={resolvedInputImage} alt="Crop Bounding Box Source" className="w-full h-full object-cover" />
+            <img src={resolvedInputImage} alt="Crop Bounding Box Source" className="w-full h-auto block" />
             <div 
               className="border-2 border-purple-500 absolute pointer-events-none"
               style={{
@@ -706,7 +737,7 @@ export function GeminiNode({ id, data }: NodeProps) {
                   key={idx}
                   src={url}
                   alt={`Vision Input ${idx + 1}`}
-                  className="max-w-full max-h-48 object-contain rounded-lg border border-zinc-200 bg-zinc-50 nodrag"
+                  className="max-w-full max-h-48 object-scale-down rounded-lg border border-zinc-200 bg-zinc-50 nodrag"
                 />
               ))}
             </div>
@@ -782,7 +813,7 @@ export function ResponseNode({ id, data }: NodeProps) {
           <div className="w-full min-h-[100px] max-h-56 bg-zinc-50 border border-zinc-200 rounded-lg p-3 overflow-y-auto text-xs text-zinc-800 font-mono leading-relaxed nodrag nowheel">
             {isBase64Image(result) ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={result} alt="Response Output Preview" className="w-full max-h-48 object-contain rounded-md animate-fade-in nodrag" />
+              <img src={result} alt="Response Output Preview" className="max-w-full h-auto object-scale-down rounded-md animate-fade-in nodrag mx-auto" />
             ) : (
               <span>{result}</span>
             )}

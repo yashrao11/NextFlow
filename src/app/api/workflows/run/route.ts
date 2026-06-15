@@ -93,9 +93,8 @@ async function localCropFallback(imageUrl: string, x: number, y: number, width: 
 
     return { imageUrl: base64Result };
   } catch (err) {
-    console.error("[DEBUG] Local fallback crop failed. Using high-fidelity placeholder fallback:", err);
-    const fallbackUrl = 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?q=80&w=400&h=400&fit=crop&crop=focalpoint';
-    return { imageUrl: fallbackUrl };
+    console.error("[DEBUG] Local fallback crop failed:", err);
+    throw err;
   }
 }
 
@@ -331,7 +330,13 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
               output = { result: resolvedInputs.result || '' };
             } else if (node.type === 'cropImage') {
               const imageUrl = resolvedInputs.images?.[0] || node.data?.imageUrl || '';
-              const crop = node.data?.crop || { x: 0, y: 0, width: 100, height: 100 };
+              const cropData = node.data?.crop || {};
+              const crop = {
+                x: typeof cropData.x === 'number' ? cropData.x : 0,
+                y: typeof cropData.y === 'number' ? cropData.y : 0,
+                width: typeof cropData.width === 'number' ? cropData.width : 100,
+                height: typeof cropData.height === 'number' ? cropData.height : 100,
+              };
 
               const triggerRun = await tasks.trigger('crop-image', {
                 imageUrl,

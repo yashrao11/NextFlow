@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 const createWorkflowSchema = z.object({
   name: z.string().min(1, 'Workflow name is required and cannot be empty'),
 });
-
+// GET: List workflows | POST: Create workflow
 export async function POST(req: Request) {
   try {
     const { userId } = auth();

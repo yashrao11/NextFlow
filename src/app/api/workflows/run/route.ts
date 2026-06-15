@@ -260,6 +260,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
 // --- BACKGROUND PARALLEL DAG ORCHESTRATOR ---
 async function executeWorkflowBackground(runId: string, nodesToExecute: any[], edgesToExecute: any[]) {
   const startTime = Date.now();
+  const activeNodeIds = new Set<string>();
 
   try {
     while (true) {
@@ -285,7 +286,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
       // Ready nodes: PENDING status and all upstream direct parent nodes in execution scope are SUCCESS
       const readyExecutions = [];
       for (const ex of executions) {
-        if (ex.status !== 'PENDING') continue;
+        if (ex.status !== 'PENDING' || activeNodeIds.has(ex.nodeId)) continue;
 
         const parentEdges = edgesToExecute.filter((e) => e.target === ex.nodeId);
         const allParentsSuccess = parentEdges.every((e) => {
@@ -298,32 +299,19 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
         }
       }
 
-      if (readyExecutions.length === 0) {
-        const running = executions.filter((e) => e.status === 'RUNNING');
-        if (running.length === 0) {
-          // Safety fallback for cycle detection or config loops
-          await prisma.nodeExecution.updateMany({
-            where: { runId, status: 'PENDING' },
-            data: { status: 'FAILED', errorMessage: 'Deadlock or circular path detected.' },
-          });
-          throw new Error('Configuration deadlock detected in DAG.');
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        continue;
-      }
+      // Start executing ready nodes asynchronously without blocking
+      for (const ex of readyExecutions) {
+        activeNodeIds.add(ex.nodeId);
 
-      // Run ready sibling nodes concurrently
-      await Promise.all(
-        readyExecutions.map(async (ex) => {
-          await prisma.nodeExecution.update({
-            where: { id: ex.id },
-            data: { status: 'RUNNING' },
-          });
-
-          const node = nodesToExecute.find((n) => n.id === ex.nodeId);
+        (async () => {
           const nodeStartTime = Date.now();
-
           try {
+            await prisma.nodeExecution.update({
+              where: { id: ex.id },
+              data: { status: 'RUNNING' },
+            });
+
+            const node = nodesToExecute.find((n) => n.id === ex.nodeId);
             const resolvedInputs = await resolveNodeInputs(node, runId, edgesToExecute);
             let output: any = {};
 
@@ -388,9 +376,14 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                 errorMessage: nodeErr.message || 'Execution error',
               },
             });
+          } finally {
+            activeNodeIds.delete(ex.nodeId);
           }
-        })
-      );
+        })();
+      }
+
+      // Sleep 500ms before checking database execution statuses again
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
     const finalExecutions = await prisma.nodeExecution.findMany({

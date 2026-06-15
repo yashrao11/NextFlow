@@ -605,17 +605,8 @@ export function CropImageNode({ id, data }: NodeProps) {
             <span className="text-[10px] text-zinc-600 font-semibold">Output Image</span>
             <InfoIcon />
           </div>
-          <div className="w-full min-h-[80px] bg-zinc-50 border border-zinc-200 rounded-lg p-2 flex items-center justify-center overflow-hidden nodrag nowheel">
-            {data.output?.imageUrl || data.imageUrl ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img 
-                src={data.output?.imageUrl || data.imageUrl} 
-                alt="Cropped Output" 
-                className="max-w-full max-h-36 object-scale-down rounded border border-zinc-200 bg-white" 
-              />
-            ) : (
-              <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
-            )}
+          <div className="w-full min-h-[48px] bg-zinc-50 border border-zinc-200 border-dashed rounded-lg p-2.5 flex items-center justify-center overflow-hidden nodrag nowheel select-none">
+            <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
           </div>
           
           <Handle
@@ -668,6 +659,30 @@ export function GeminiNode({ id, data }: NodeProps) {
   const handleTriggerLocalRun = () => {
     const event = new CustomEvent('run-node', { detail: { nodeId: id } });
     window.dispatchEvent(event);
+  };
+
+  const getConnectedImages = (): string[] => {
+    const incomingEdges = edges.filter(
+      (e) => e.target === id && e.targetHandle === 'image-input'
+    );
+    const images: string[] = [];
+    incomingEdges.forEach((edge) => {
+      const parentNode = nodes.find((n) => n.id === edge.source);
+      if (!parentNode) return;
+      
+      if (parentNode.type === 'cropImage') {
+        const img = parentNode.data.output?.imageUrl || parentNode.data.imageUrl;
+        if (img) images.push(img);
+      } else if (parentNode.type === 'requestInputs') {
+        const fields = parentNode.data.fields || [];
+        const fieldId = edge.sourceHandle?.split('-')[0] || '';
+        const imgField = fields.find((f: any) => f.id.startsWith(fieldId) && f.type === 'image');
+        if (imgField?.value) {
+          images.push(imgField.value);
+        }
+      }
+    });
+    return images;
   };
 
   return (
@@ -751,13 +766,13 @@ export function GeminiNode({ id, data }: NodeProps) {
               style={{ left: '-22px', top: '10px' }}
             />
             <div className="flex items-center justify-between select-none">
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-zinc-600 font-semibold uppercase tracking-wider">
+              <div className="flex items-center gap-1 font-semibold">
+                <span className="text-[10px] text-zinc-650 tracking-wider">
                   System Prompt
                 </span>
                 <InfoIcon />
               </div>
-              <button className="p-0.5 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+              <button className="p-0.5 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors font-semibold">
                 <Plus className="w-3 h-3" />
               </button>
             </div>
@@ -773,34 +788,46 @@ export function GeminiNode({ id, data }: NodeProps) {
           </div>
 
           {/* Image (Vision) Input row */}
-          <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+          <div className="relative flex flex-col bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
             <Handle
               type="target"
               position={Position.Left}
               id="image-input"
               className={getHandleClass('teal')}
-              style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
+              style={{ left: '-22px', top: '16px' }}
             />
-            <div className="flex items-center gap-1 select-none">
-              <span className="text-[10px] font-semibold text-zinc-600">Image (Vision)</span>
-              <InfoIcon />
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-1 select-none">
+                <span className="text-[10px] font-semibold text-zinc-600">Image (Vision)</span>
+                <InfoIcon />
+              </div>
+              
+              <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors font-semibold">
+                <Plus className="w-3 h-3" />
+              </button>
             </div>
-            
-            <button
-              disabled={isImageConnected}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
-                isImageConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
-              }`}
-            >
-              <ImageIcon className="w-3 h-3 text-zinc-400" />
-              <span>{isImageConnected ? 'Connected' : 'Upload image'}</span>
-            </button>
-            
-            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
-              <Plus className="w-3 h-3" />
-            </button>
-          </div>
 
+            {isImageConnected ? (
+              <div className="flex flex-wrap gap-1.5 mt-1 select-none nodrag">
+                {getConnectedImages().map((imgUrl, idx) => (
+                  <div key={idx} className="relative w-12 h-12 border border-zinc-250 rounded overflow-hidden bg-white shadow-sm transition-transform hover:scale-105 duration-200">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={imgUrl} alt={`Cropped input ${idx + 1}`} className="w-full h-full object-cover" />
+                  </div>
+                ))}
+                {getConnectedImages().length === 0 && (
+                  <span className="text-[10px] text-zinc-400 italic">Connected (waiting for output)</span>
+                )}
+              </div>
+            ) : (
+              <button
+                className="w-full flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 hover:bg-zinc-50 transition-colors nodrag"
+              >
+                <ImageIcon className="w-3 h-3 text-zinc-400" />
+                <span>Upload image</span>
+              </button>
+            )}
+          </div>
           {/* Video Input row */}
           <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
             <Handle

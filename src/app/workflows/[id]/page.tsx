@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Play, Save, Edit3, Loader2, Check, History, X, Download, Upload } from 'lucide-react';
+import { ArrowLeft, Play, Save, Edit3, Loader2, Check, History, X, Download, Upload, Undo2, Redo2 } from 'lucide-react';
 import { useWorkflowStore } from '@/store/useWorkflowStore';
 import WorkflowCanvas from '@/components/canvas/WorkflowCanvas';
 import { ReactFlowProvider } from 'reactflow';
@@ -26,6 +26,10 @@ export default function WorkflowBuilderPage() {
   const setNodes = useWorkflowStore((state) => state.setNodes);
   const setEdges = useWorkflowStore((state) => state.setEdges);
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const undo = useWorkflowStore((state) => state.undo);
+  const redo = useWorkflowStore((state) => state.redo);
+  const undoStack = useWorkflowStore((state) => state.undoStack);
+  const redoStack = useWorkflowStore((state) => state.redoStack);
 
   const [name, setName] = useState('Untitled Workflow');
   const [isEditingName, setIsEditingName] = useState(false);
@@ -108,6 +112,36 @@ export default function WorkflowBuilderPage() {
 
     loadWorkflow();
   }, [id, setNodes, setEdges, router]);
+
+  // --- KEYBOARD SHORTCUTS FOR UNDO / REDO ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+      if (cmdOrCtrl && e.key?.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+      } else if (cmdOrCtrl && e.key?.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [undo, redo]);
 
   // --- DOUBLE CLICK RENAME HANDLERS ---
   const handleStartRename = () => {
@@ -249,7 +283,7 @@ export default function WorkflowBuilderPage() {
                 isRunning: false,
                 duration: exec.duration,
                 ...(node.type === 'gemini' && { response: exec.output?.response || '' }),
-                ...(node.type === 'cropImage' && { imageUrl: exec.output?.imageUrl || '' }),
+                ...(node.type === 'cropImage' && { output: exec.output || {} }),
                 ...(node.type === 'response' && { result: exec.output?.result || '' }),
                 ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
               });
@@ -389,6 +423,10 @@ export default function WorkflowBuilderPage() {
   const handleResetWorkflow = async () => {
     if (isExecuting || isSaving) return;
 
+    // Save history before resetting
+    const saveStateToHistory = useWorkflowStore.getState().saveStateToHistory;
+    saveStateToHistory();
+
     // Reset visual nodes execution data locally
     const resetNodes = nodes.map((node) => {
       const updatedData = { ...node.data };
@@ -406,6 +444,10 @@ export default function WorkflowBuilderPage() {
         updatedData.response = '';
         updatedData.imageUrl = '';
         updatedData.output = {};
+        updatedData.uploadedImages = [];
+        updatedData.uploadedVideo = null;
+        updatedData.uploadedAudio = null;
+        updatedData.uploadedFile = null;
       } else if (node.type === 'response') {
         updatedData.result = '';
         updatedData.output = {};
@@ -510,6 +552,30 @@ export default function WorkflowBuilderPage() {
 
         {/* CONTROLS BUTTONS */}
         <div className="flex items-center gap-3">
+          {/* Undo Button */}
+          <button
+            onClick={undo}
+            disabled={undoStack.length === 0}
+            className="flex items-center gap-1 px-2.5 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-700 disabled:opacity-40 disabled:hover:bg-white disabled:hover:border-zinc-200 disabled:cursor-not-allowed transition-all cursor-pointer"
+            title="Undo (Cmd+Z / Ctrl+Z)"
+          >
+            <Undo2 className="w-3.5 h-3.5" />
+            <span>Undo</span>
+          </button>
+
+          {/* Redo Button */}
+          <button
+            onClick={redo}
+            disabled={redoStack.length === 0}
+            className="flex items-center gap-1 px-2.5 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-700 disabled:opacity-40 disabled:hover:bg-white disabled:hover:border-zinc-200 disabled:cursor-not-allowed transition-all cursor-pointer"
+            title="Redo (Cmd+Shift+Z / Ctrl+Y)"
+          >
+            <Redo2 className="w-3.5 h-3.5" />
+            <span>Redo</span>
+          </button>
+
+          <div className="h-4 w-px bg-zinc-200 mx-1" />
+
           {/* Export JSON Button */}
           <button
             onClick={handleExportWorkflow}

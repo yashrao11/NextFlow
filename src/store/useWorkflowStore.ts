@@ -76,12 +76,20 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   onNodesChange: (changes) => {
+    const hasRemove = changes.some((c) => c.type === 'remove');
+    if (hasRemove) {
+      get().saveStateToHistory();
+    }
     set({
       nodes: applyNodeChanges(changes, get().nodes),
     });
   },
 
   onEdgesChange: (changes) => {
+    const hasRemove = changes.some((c) => c.type === 'remove');
+    if (hasRemove) {
+      get().saveStateToHistory();
+    }
     set({
       edges: applyEdgeChanges(changes, get().edges),
     });

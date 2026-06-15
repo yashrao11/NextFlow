@@ -3,7 +3,14 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const geminiPromptTask = task({
   id: "gemini-prompt",
-  run: async (payload: { prompt: string; systemPrompt?: string; images?: string[] }) => {
+  run: async (payload: {
+    prompt: string;
+    systemPrompt?: string;
+    images?: string[];
+    video?: { data: string; type: string };
+    audio?: { data: string; type: string };
+    file?: { data: string; type: string };
+  }) => {
     const apiKey = process.env.GEMINI_API_KEY || "";
 
     console.log("[DEBUG] Starting live Gemini prompt execution using active model candidates.");
@@ -52,6 +59,45 @@ export const geminiPromptTask = task({
               });
             }
           }
+        }
+
+        if (payload.video && payload.video.data) {
+          let cleanBase64 = payload.video.data;
+          if (cleanBase64.includes(',')) {
+            cleanBase64 = cleanBase64.split(',')[1];
+          }
+          contents.push({
+            inlineData: {
+              data: cleanBase64,
+              mimeType: payload.video.type || 'video/mp4'
+            }
+          });
+        }
+
+        if (payload.audio && payload.audio.data) {
+          let cleanBase64 = payload.audio.data;
+          if (cleanBase64.includes(',')) {
+            cleanBase64 = cleanBase64.split(',')[1];
+          }
+          contents.push({
+            inlineData: {
+              data: cleanBase64,
+              mimeType: payload.audio.type || 'audio/mp3'
+            }
+          });
+        }
+
+        if (payload.file && payload.file.data) {
+          let cleanBase64 = payload.file.data;
+          if (cleanBase64.includes(',')) {
+            cleanBase64 = cleanBase64.split(',')[1];
+          }
+          contents.push({
+            inlineData: {
+              data: cleanBase64,
+              mimeType: payload.file.type || 'application/pdf'
+            }
+          });
         }
 
         const result = await model.generateContent({

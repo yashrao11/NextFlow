@@ -102,7 +102,15 @@ async function localCropFallback(imageUrl: string, x: number, y: number, width: 
 }
 
 // --- LOCAL FALLBACK GEMINI PROMPT ---
-async function localGeminiFallback(prompt: string, systemPrompt: string, modelName: string, images: string[]): Promise<any> {
+async function localGeminiFallback(
+  prompt: string,
+  systemPrompt: string,
+  modelName: string,
+  images: string[],
+  video?: { data: string; type: string },
+  audio?: { data: string; type: string },
+  file?: { data: string; type: string }
+): Promise<any> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is not defined');
@@ -154,6 +162,45 @@ async function localGeminiFallback(prompt: string, systemPrompt: string, modelNa
             });
           }
         }
+      }
+
+      if (video && video.data) {
+        let cleanBase64 = video.data;
+        if (cleanBase64.includes(',')) {
+          cleanBase64 = cleanBase64.split(',')[1];
+        }
+        contents.push({
+          inlineData: {
+            data: cleanBase64,
+            mimeType: video.type || 'video/mp4',
+          },
+        });
+      }
+
+      if (audio && audio.data) {
+        let cleanBase64 = audio.data;
+        if (cleanBase64.includes(',')) {
+          cleanBase64 = cleanBase64.split(',')[1];
+        }
+        contents.push({
+          inlineData: {
+            data: cleanBase64,
+            mimeType: audio.type || 'audio/mp3',
+          },
+        });
+      }
+
+      if (file && file.data) {
+        let cleanBase64 = file.data;
+        if (cleanBase64.includes(',')) {
+          cleanBase64 = cleanBase64.split(',')[1];
+        }
+        contents.push({
+          inlineData: {
+            data: cleanBase64,
+            mimeType: file.type || 'application/pdf',
+          },
+        });
       }
 
       const result = await model.generateContent(contents);
@@ -222,6 +269,48 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
         imgUrl = field?.value || '';
       }
       if (imgUrl) inputs.images.push(imgUrl);
+    } else if (edge.targetHandle === 'video-input') {
+      let videoVal = null;
+      if (parentOutput.video) {
+        videoVal = parentOutput.video;
+      } else if (parentOutput.fields) {
+        const fieldId = edge.sourceHandle?.split('-')[0] || '';
+        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        videoVal = field?.value || null;
+      } else if (parentOutput.result) {
+        videoVal = parentOutput.result;
+      }
+      if (videoVal) {
+        inputs.video = videoVal;
+      }
+    } else if (edge.targetHandle === 'audio-input') {
+      let audioVal = null;
+      if (parentOutput.audio) {
+        audioVal = parentOutput.audio;
+      } else if (parentOutput.fields) {
+        const fieldId = edge.sourceHandle?.split('-')[0] || '';
+        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        audioVal = field?.value || null;
+      } else if (parentOutput.result) {
+        audioVal = parentOutput.result;
+      }
+      if (audioVal) {
+        inputs.audio = audioVal;
+      }
+    } else if (edge.targetHandle === 'file-input') {
+      let fileVal = null;
+      if (parentOutput.file) {
+        fileVal = parentOutput.file;
+      } else if (parentOutput.fields) {
+        const fieldId = edge.sourceHandle?.split('-')[0] || '';
+        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        fileVal = field?.value || null;
+      } else if (parentOutput.result) {
+        fileVal = parentOutput.result;
+      }
+      if (fileVal) {
+        inputs.file = fileVal;
+      }
     } else if (edge.targetHandle === 'prompt-text-input' || edge.targetHandle === 'system-text-input') {
       let textVal = '';
       if (parentOutput.response) {
@@ -343,16 +432,42 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
             } else if (node.type === 'gemini') {
               const prompt = resolvedInputs.prompt || node.data?.prompt || '';
               const systemPrompt = resolvedInputs.systemPrompt || node.data?.systemPrompt || '';
-              const images = resolvedInputs.images || [];
+              const images = [
+                ...(resolvedInputs.images || []),
+                ...(node.data?.uploadedImages || [])
+              ];
+              const video = resolvedInputs.video || node.data?.uploadedVideo || null;
+              const audio = resolvedInputs.audio || node.data?.uploadedAudio || null;
+              const file = resolvedInputs.file || node.data?.uploadedFile || null;
 
-              const triggerRun = await tasks.trigger('gemini-prompt', {
+              const triggerPayload: any = {
                 prompt,
                 systemPrompt,
                 images,
-              });
+              };
+
+              if (video) {
+                triggerPayload.video = typeof video === 'string' ? { data: video, type: 'video/mp4' } : { data: video.data, type: video.type };
+              }
+              if (audio) {
+                triggerPayload.audio = typeof audio === 'string' ? { data: audio, type: 'audio/mp3' } : { data: audio.data, type: audio.type };
+              }
+              if (file) {
+                triggerPayload.file = typeof file === 'string' ? { data: file, type: 'application/pdf' } : { data: file.data, type: file.type };
+              }
+
+              const triggerRun = await tasks.trigger('gemini-prompt', triggerPayload);
 
               output = await pollTriggerRun(triggerRun.id, () =>
-                localGeminiFallback(prompt, systemPrompt, node.data?.model || 'Gemini 3.1 Pro', images)
+                localGeminiFallback(
+                  prompt,
+                  systemPrompt,
+                  node.data?.model || 'Gemini 3.1 Pro',
+                  images,
+                  video ? (typeof video === 'string' ? { data: video, type: 'video/mp4' } : { data: video.data, type: video.type }) : undefined,
+                  audio ? (typeof audio === 'string' ? { data: audio, type: 'audio/mp3' } : { data: audio.data, type: audio.type }) : undefined,
+                  file ? (typeof file === 'string' ? { data: file, type: 'application/pdf' } : { data: file.data, type: file.type }) : undefined
+                )
               );
             }
 

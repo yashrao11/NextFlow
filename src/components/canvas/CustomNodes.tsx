@@ -26,6 +26,7 @@ import {
   File as FileIcon,
   SlidersHorizontal,
   MoreHorizontal,
+  X,
 } from 'lucide-react';
 
 const handleClass = "!w-3 !h-3 !bg-purple-500 !border-2 !border-white hover:scale-125 transition-transform shadow";
@@ -41,10 +42,6 @@ const getHandleClass = (colorType: 'orange' | 'teal' | 'green' | 'blue' | 'purpl
   };
   return `!w-3 !h-3 ${colorMap[colorType]} !border-2 !border-white hover:scale-125 transition-transform shadow`;
 };
-
-const InfoIcon = () => (
-  <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-zinc-300 text-[9px] text-zinc-400 hover:text-zinc-600 transition-colors select-none ml-1.5 cursor-help font-mono font-medium">i</span>
-);
 
 // --- INLINE MARKDOWN RENDERER ---
 function MarkdownRenderer({ content }: { content: string }) {
@@ -77,6 +74,7 @@ function MarkdownRenderer({ content }: { content: string }) {
 // --- 1. REQUEST INPUTS NODE ---
 export function RequestInputsNode({ id, data }: NodeProps) {
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
   const [isAdding, setIsAdding] = useState(false);
   const [fieldName, setFieldName] = useState('');
   const [fieldType, setFieldType] = useState<'text' | 'image'>('text');
@@ -86,6 +84,8 @@ export function RequestInputsNode({ id, data }: NodeProps) {
   const handleAddField = (e: React.FormEvent) => {
     e.preventDefault();
     if (!fieldName.trim()) return;
+
+    saveStateToHistory();
 
     const cleanName = fieldName.trim().replace(/\s+/g, '-').toLowerCase();
     const newField = {
@@ -101,6 +101,7 @@ export function RequestInputsNode({ id, data }: NodeProps) {
   };
 
   const handleRemoveField = (fieldId: string) => {
+    saveStateToHistory();
     updateNodeData(id, {
       fields: fields.filter((f: any) => f.id !== fieldId),
     });
@@ -114,6 +115,7 @@ export function RequestInputsNode({ id, data }: NodeProps) {
 
   // Re-ordering arrow shift
   const handleMoveField = (index: number, direction: 'up' | 'down') => {
+    saveStateToHistory();
     const newFields = [...fields];
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     if (targetIndex >= 0 && targetIndex < newFields.length) {
@@ -126,6 +128,7 @@ export function RequestInputsNode({ id, data }: NodeProps) {
 
   // Duplication command
   const handleDuplicateField = (field: any) => {
+    saveStateToHistory();
     const cleanName = `${field.name.toLowerCase().replace(/\s+/g, '-')}-copy`;
     const newField = {
       ...field,
@@ -138,6 +141,7 @@ export function RequestInputsNode({ id, data }: NodeProps) {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, fieldId: string) => {
     const file = e.target.files?.[0];
     if (file) {
+      saveStateToHistory();
       const reader = new FileReader();
       reader.onloadend = () => {
         const img = new Image();
@@ -251,6 +255,7 @@ export function RequestInputsNode({ id, data }: NodeProps) {
                   <textarea
                     value={field.value}
                     onChange={(e) => handleValueChange(field.id, e.target.value)}
+                    onFocus={saveStateToHistory}
                     placeholder="Enter text input..."
                     className="w-full text-xs bg-white border border-zinc-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-purple-500 resize-y text-zinc-850 min-h-[48px] nodrag nowheel"
                   />
@@ -268,18 +273,26 @@ export function RequestInputsNode({ id, data }: NodeProps) {
                         </button>
                       </div>
                     ) : (
-                      <label className="flex flex-col items-center justify-center w-full h-16 border border-dashed border-zinc-300 hover:border-zinc-450 bg-white rounded cursor-pointer transition-colors">
-                        <div className="flex flex-col items-center justify-center py-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = document.getElementById(`request-image-upload-${field.id}`);
+                          if (el) el.click();
+                        }}
+                        className="flex flex-col items-center justify-center w-full h-16 border border-dashed border-zinc-300 hover:border-zinc-450 bg-white rounded cursor-pointer transition-colors nodrag"
+                      >
+                        <div className="flex flex-col items-center justify-center py-2 pointer-events-none">
                           <Upload className="w-4 h-4 text-zinc-400 mb-1" />
                           <p className="text-[10px] text-zinc-455 font-medium">Upload image file</p>
                         </div>
                         <input
+                          id={`request-image-upload-${field.id}`}
                           type="file"
                           accept="image/*"
                           onChange={(e) => handleImageUpload(e, field.id)}
                           className="hidden"
                         />
-                      </label>
+                      </button>
                     )}
                   </div>
                 )}
@@ -374,6 +387,7 @@ export function CropImageNode({ id, data }: NodeProps) {
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const edges = useWorkflowStore((state) => state.edges);
   const nodes = useWorkflowStore((state) => state.nodes);
+  const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
 
   const isImageConnected = edges.some(
     (edge) => edge.target === id && edge.targetHandle === 'image-input'
@@ -464,7 +478,6 @@ export function CropImageNode({ id, data }: NodeProps) {
         
         <div className="flex items-center gap-1 select-none w-28 truncate">
           <span className="text-[10px] font-semibold text-zinc-605">{label}</span>
-          <InfoIcon />
         </div>
 
         <input
@@ -474,6 +487,7 @@ export function CropImageNode({ id, data }: NodeProps) {
           value={displayVal}
           disabled={isConnected}
           onChange={(e) => handleValChange(field, parseInt(e.target.value) || 0)}
+          onMouseDown={saveStateToHistory}
           className={`w-20 accent-purple-600 bg-zinc-200 h-1 rounded-lg cursor-pointer nodrag ${
             isConnected ? 'opacity-40 cursor-not-allowed' : ''
           }`}
@@ -486,7 +500,8 @@ export function CropImageNode({ id, data }: NodeProps) {
           value={displayVal}
           disabled={isConnected}
           onChange={(e) => handleValChange(field, parseInt(e.target.value) || 0)}
-          className={`w-9 text-center text-[10px] bg-white border border-zinc-200 rounded px-0.5 py-0.5 text-zinc-805 font-semibold focus:outline-none focus:border-purple-500 font-mono nodrag ${
+          onFocus={saveStateToHistory}
+          className={`w-9 text-center text-[10px] bg-white border border-zinc-200 rounded px-0.5 py-0.5 text-zinc-850 font-semibold focus:outline-none focus:border-purple-500 font-mono nodrag ${
             isConnected ? 'opacity-40 bg-zinc-100 cursor-not-allowed' : ''
           }`}
         />
@@ -552,11 +567,15 @@ export function CropImageNode({ id, data }: NodeProps) {
           <div className="flex items-center gap-1 select-none">
             <span className="text-[10px] font-semibold text-zinc-600">Input Image</span>
             <span className="text-red-500 text-[10px] font-bold">*</span>
-            <InfoIcon />
           </div>
           
           <button
+            type="button"
             disabled={isImageConnected}
+            onClick={() => {
+              const el = document.getElementById(`crop-image-upload-${id}`);
+              if (el) el.click();
+            }}
             className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
               isImageConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
             }`}
@@ -564,6 +583,23 @@ export function CropImageNode({ id, data }: NodeProps) {
             <ImageIcon className="w-3 h-3 text-zinc-400" />
             <span>{isImageConnected ? 'Connected' : 'Upload image'}</span>
           </button>
+          <input
+            id={`crop-image-upload-${id}`}
+            type="file"
+            accept="image/*"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                saveStateToHistory();
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  updateNodeData(id, { imageUrl: reader.result as string });
+                };
+                reader.readAsDataURL(file);
+              }
+            }}
+            className="hidden"
+          />
           
           <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
             <Plus className="w-3 h-3" />
@@ -602,11 +638,14 @@ export function CropImageNode({ id, data }: NodeProps) {
         {/* Output Image Box section */}
         <div className="border-t border-zinc-100 pt-3 space-y-1.5 relative">
           <div className="flex items-center gap-1 select-none pl-1">
-            <span className="text-[10px] text-zinc-600 font-semibold">Output Image</span>
-            <InfoIcon />
+            <span className="text-[10px] text-zinc-605 font-semibold">Output Image</span>
           </div>
           <div className="w-full min-h-[48px] bg-zinc-50 border border-zinc-200 border-dashed rounded-lg p-2.5 flex items-center justify-center overflow-hidden nodrag nowheel select-none">
-            <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
+            {data.output?.imageUrl ? (
+              <img src={data.output.imageUrl} alt="Cropped Output Preview" className="max-w-full h-auto object-contain rounded" />
+            ) : (
+              <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
+            )}
           </div>
           
           <Handle
@@ -627,6 +666,8 @@ export function GeminiNode({ id, data }: NodeProps) {
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const edges = useWorkflowStore((state) => state.edges);
   const nodes = useWorkflowStore((state) => state.nodes);
+  const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
+  const showNotification = useWorkflowStore((state) => state.showNotification);
   const [showSettings, setShowSettings] = useState(false);
 
   const model = data.model || 'Gemini 3.1 Pro';
@@ -635,6 +676,11 @@ export function GeminiNode({ id, data }: NodeProps) {
   const prompt = data.prompt || '';
   const systemPrompt = data.systemPrompt || '';
   const responseText = data.output?.response || data.response || '';
+
+  const uploadedImages = data.uploadedImages || [];
+  const uploadedVideo = data.uploadedVideo || null;
+  const uploadedAudio = data.uploadedAudio || null;
+  const uploadedFile = data.uploadedFile || null;
 
   const isPromptConnected = edges.some(
     (edge) => edge.target === id && edge.targetHandle === 'prompt-text-input'
@@ -685,6 +731,65 @@ export function GeminiNode({ id, data }: NodeProps) {
     return images;
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // Check size limit (4.5MB)
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].size > 4.5 * 1024 * 1024) {
+        showNotification(`File "${files[i].name}" exceeds the 4.5MB limit. Please upload a smaller image.`, 'error');
+        return;
+      }
+    }
+
+    saveStateToHistory();
+
+    const readers = Array.from(files).map((file) => {
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          resolve(reader.result as string);
+        };
+        reader.readAsDataURL(file);
+      });
+    });
+
+    Promise.all(readers).then((newImages) => {
+      updateNodeData(id, {
+        uploadedImages: [...uploadedImages, ...newImages]
+      });
+    });
+    e.target.value = '';
+  };
+
+  const handleSingleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, fieldName: string) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Check size limit (4.5MB)
+    if (file.size > 4.5 * 1024 * 1024) {
+      showNotification(`File "${file.name}" exceeds the 4.5MB limit. Please upload a smaller file.`, 'error');
+      return;
+    }
+
+    saveStateToHistory();
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      updateNodeData(id, {
+        [fieldName]: {
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          data: reader.result as string
+        }
+      });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
   return (
     <div
       className={`w-[320px] max-w-[320px] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-lg overflow-hidden p-4 text-zinc-900 transition-all duration-300 ${
@@ -700,7 +805,7 @@ export function GeminiNode({ id, data }: NodeProps) {
         </div>
         
         <div className="flex items-center gap-1.5">
-          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors">
+          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors font-semibold">
             <SlidersHorizontal className="w-3.5 h-3.5" />
           </button>
           <button
@@ -743,11 +848,11 @@ export function GeminiNode({ id, data }: NodeProps) {
                 Prompt
               </span>
               <span className="text-red-500 text-[10px] font-bold">*</span>
-              <InfoIcon />
             </div>
             <textarea
               value={isPromptConnected ? '(Connected to flow input)' : prompt}
               onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
+              onFocus={saveStateToHistory}
               placeholder="Enter your prompt..."
               disabled={isPromptConnected}
               className={`w-full text-xs bg-zinc-50 border border-zinc-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-purple-500 resize-y text-zinc-900 min-h-[50px] nodrag nowheel ${
@@ -767,10 +872,9 @@ export function GeminiNode({ id, data }: NodeProps) {
             />
             <div className="flex items-center justify-between select-none">
               <div className="flex items-center gap-1 font-semibold">
-                <span className="text-[10px] text-zinc-650 tracking-wider">
+                <span className="text-[10px] text-zinc-655 tracking-wider">
                   System Prompt
                 </span>
-                <InfoIcon />
               </div>
               <button className="p-0.5 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors font-semibold">
                 <Plus className="w-3 h-3" />
@@ -779,6 +883,7 @@ export function GeminiNode({ id, data }: NodeProps) {
             <textarea
               value={isSystemPromptConnected ? '(Connected to flow input)' : systemPrompt}
               onChange={(e) => updateNodeData(id, { systemPrompt: e.target.value })}
+              onFocus={saveStateToHistory}
               placeholder="You are a helpful coding assistant..."
               disabled={isSystemPromptConnected}
               className={`w-full text-xs bg-zinc-50 border border-zinc-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-purple-500 resize-y text-zinc-900 min-h-[40px] nodrag nowheel ${
@@ -799,7 +904,6 @@ export function GeminiNode({ id, data }: NodeProps) {
             <div className="flex items-center justify-between w-full">
               <div className="flex items-center gap-1 select-none">
                 <span className="text-[10px] font-semibold text-zinc-600">Image (Vision)</span>
-                <InfoIcon />
               </div>
               
               <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors font-semibold">
@@ -808,26 +912,69 @@ export function GeminiNode({ id, data }: NodeProps) {
             </div>
 
             {isImageConnected ? (
-              <div className="flex flex-wrap gap-1.5 mt-1 select-none nodrag">
+              <div className="flex flex-col items-center gap-2.5 mt-1 select-none nodrag w-full">
                 {getConnectedImages().map((imgUrl, idx) => (
-                  <div key={idx} className="relative w-12 h-12 border border-zinc-250 rounded overflow-hidden bg-white shadow-sm transition-transform hover:scale-105 duration-200">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={imgUrl} alt={`Cropped input ${idx + 1}`} className="w-full h-full object-cover" />
-                  </div>
+                  <img
+                    key={idx}
+                    src={imgUrl}
+                    alt={`Cropped input ${idx + 1}`}
+                    className="max-w-full max-h-48 object-scale-down rounded-lg border border-zinc-200 bg-zinc-50 nodrag"
+                  />
                 ))}
                 {getConnectedImages().length === 0 && (
                   <span className="text-[10px] text-zinc-400 italic">Connected (waiting for output)</span>
                 )}
               </div>
             ) : (
-              <button
-                className="w-full flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 hover:bg-zinc-50 transition-colors nodrag"
-              >
-                <ImageIcon className="w-3 h-3 text-zinc-400" />
-                <span>Upload image</span>
-              </button>
+              <div className="space-y-2 w-full nodrag">
+                {uploadedImages.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-1 select-none">
+                    {uploadedImages.map((imgUrl: string, idx: number) => (
+                      <div key={idx} className="relative group h-16 w-auto max-w-full shrink-0">
+                        <img
+                          src={imgUrl}
+                          alt={`Manual upload ${idx + 1}`}
+                          className="h-full w-auto border border-zinc-200 rounded bg-white shadow-sm object-contain"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            saveStateToHistory();
+                            updateNodeData(id, {
+                              uploadedImages: uploadedImages.filter((_: string, i: number) => i !== idx)
+                            });
+                          }}
+                          className="absolute inset-0 bg-black/60 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer rounded"
+                        >
+                          <X className="w-3.5 h-3.5 text-white" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById(`image-upload-${id}`);
+                    if (el) el.click();
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 hover:border-zinc-300 rounded text-[10px] font-semibold text-zinc-650 hover:bg-zinc-50 transition-colors cursor-pointer"
+                >
+                  <ImageIcon className="w-3 h-3 text-zinc-400" />
+                  <span>Upload image</span>
+                </button>
+                <input
+                  id={`image-upload-${id}`}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleImageUpload}
+                  className="hidden"
+                />
+              </div>
             )}
           </div>
+
           {/* Video Input row */}
           <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
             <Handle
@@ -837,22 +984,54 @@ export function GeminiNode({ id, data }: NodeProps) {
               className={getHandleClass('green')}
               style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
             />
-            <div className="flex items-center gap-1 select-none">
+            <div className="flex items-center gap-1 select-none shrink-0 w-[80px]">
               <span className="text-[10px] font-semibold text-zinc-600">Video</span>
-              <InfoIcon />
             </div>
             
-            <button
-              disabled={isVideoConnected}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
-                isVideoConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
-              }`}
-            >
-              <VideoIcon className="w-3 h-3 text-zinc-400" />
-              <span>{isVideoConnected ? 'Connected' : 'Upload video'}</span>
-            </button>
+            {isVideoConnected ? (
+              <div className="flex-1 text-[10px] text-zinc-450 italic pl-2 nodrag">Connected</div>
+            ) : uploadedVideo ? (
+              <div className="flex-1 flex items-center justify-between bg-white border border-zinc-200 rounded px-2.5 py-1 text-[10px] text-zinc-700 font-medium nodrag truncate">
+                <div className="flex items-center gap-1.5 truncate max-w-[130px]">
+                  <VideoIcon className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  <span className="truncate" title={uploadedVideo.name}>{uploadedVideo.name}</span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-zinc-400 text-[9px]">({(uploadedVideo.size / (1024 * 1024)).toFixed(2)}MB)</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      saveStateToHistory();
+                      updateNodeData(id, { uploadedVideo: null });
+                    }}
+                    className="p-0.5 hover:bg-zinc-100 rounded text-zinc-400 hover:text-red-500 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById(`video-upload-${id}`);
+                  if (el) el.click();
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 hover:border-zinc-300 rounded text-[10px] font-semibold text-zinc-655 hover:bg-zinc-50 transition-colors cursor-pointer nodrag"
+              >
+                <VideoIcon className="w-3 h-3 text-zinc-400" />
+                <span>Upload video</span>
+              </button>
+            )}
+            <input
+              id={`video-upload-${id}`}
+              type="file"
+              accept="video/*"
+              onChange={(e) => handleSingleFileUpload(e, 'uploadedVideo')}
+              className="hidden"
+            />
             
-            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors shrink-0 font-semibold">
               <Plus className="w-3 h-3" />
             </button>
           </div>
@@ -866,22 +1045,54 @@ export function GeminiNode({ id, data }: NodeProps) {
               className={getHandleClass('blue')}
               style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
             />
-            <div className="flex items-center gap-1 select-none">
+            <div className="flex items-center gap-1 select-none shrink-0 w-[80px]">
               <span className="text-[10px] font-semibold text-zinc-600">Audio</span>
-              <InfoIcon />
             </div>
             
-            <button
-              disabled={isAudioConnected}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
-                isAudioConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
-              }`}
-            >
-              <AudioIcon className="w-3 h-3 text-zinc-400" />
-              <span>{isAudioConnected ? 'Connected' : 'Upload audio'}</span>
-            </button>
+            {isAudioConnected ? (
+              <div className="flex-1 text-[10px] text-zinc-450 italic pl-2 nodrag">Connected</div>
+            ) : uploadedAudio ? (
+              <div className="flex-1 flex items-center justify-between bg-white border border-zinc-200 rounded px-2.5 py-1 text-[10px] text-zinc-700 font-medium nodrag truncate">
+                <div className="flex items-center gap-1.5 truncate max-w-[130px]">
+                  <AudioIcon className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                  <span className="truncate" title={uploadedAudio.name}>{uploadedAudio.name}</span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-zinc-400 text-[9px]">({(uploadedAudio.size / (1024 * 1024)).toFixed(2)}MB)</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      saveStateToHistory();
+                      updateNodeData(id, { uploadedAudio: null });
+                    }}
+                    className="p-0.5 hover:bg-zinc-100 rounded text-zinc-400 hover:text-red-500 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById(`audio-upload-${id}`);
+                  if (el) el.click();
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 hover:border-zinc-300 rounded text-[10px] font-semibold text-zinc-655 hover:bg-zinc-50 transition-colors cursor-pointer nodrag"
+              >
+                <AudioIcon className="w-3 h-3 text-zinc-400" />
+                <span>Upload audio</span>
+              </button>
+            )}
+            <input
+              id={`audio-upload-${id}`}
+              type="file"
+              accept="audio/*"
+              onChange={(e) => handleSingleFileUpload(e, 'uploadedAudio')}
+              className="hidden"
+            />
             
-            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors shrink-0 font-semibold">
               <Plus className="w-3 h-3" />
             </button>
           </div>
@@ -895,22 +1106,54 @@ export function GeminiNode({ id, data }: NodeProps) {
               className={getHandleClass('purple')}
               style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
             />
-            <div className="flex items-center gap-1 select-none">
+            <div className="flex items-center gap-1 select-none shrink-0 w-[80px]">
               <span className="text-[10px] font-semibold text-zinc-600">File</span>
-              <InfoIcon />
             </div>
             
-            <button
-              disabled={isFileConnected}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
-                isFileConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
-              }`}
-            >
-              <FileIcon className="w-3 h-3 text-zinc-400" />
-              <span>{isFileConnected ? 'Connected' : 'Upload file'}</span>
-            </button>
+            {isFileConnected ? (
+              <div className="flex-1 text-[10px] text-zinc-450 italic pl-2 nodrag">Connected</div>
+            ) : uploadedFile ? (
+              <div className="flex-1 flex items-center justify-between bg-white border border-zinc-200 rounded px-2.5 py-1 text-[10px] text-zinc-700 font-medium nodrag truncate">
+                <div className="flex items-center gap-1.5 truncate max-w-[130px]">
+                  <FileIcon className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                  <span className="truncate" title={uploadedFile.name}>{uploadedFile.name}</span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-zinc-400 text-[9px]">({(uploadedFile.size / (1024 * 1024)).toFixed(2)}MB)</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      saveStateToHistory();
+                      updateNodeData(id, { uploadedFile: null });
+                    }}
+                    className="p-0.5 hover:bg-zinc-100 rounded text-zinc-400 hover:text-red-500 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById(`file-upload-${id}`);
+                  if (el) el.click();
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 hover:border-zinc-300 rounded text-[10px] font-semibold text-zinc-655 hover:bg-zinc-50 transition-colors cursor-pointer nodrag"
+              >
+                <FileIcon className="w-3 h-3 text-zinc-400" />
+                <span>Upload file</span>
+              </button>
+            )}
+            <input
+              id={`file-upload-${id}`}
+              type="file"
+              accept="application/pdf,text/*"
+              onChange={(e) => handleSingleFileUpload(e, 'uploadedFile')}
+              className="hidden"
+            />
             
-            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors shrink-0 font-semibold">
               <Plus className="w-3 h-3" />
             </button>
           </div>
@@ -932,10 +1175,13 @@ export function GeminiNode({ id, data }: NodeProps) {
           {showSettings && (
             <div className="space-y-3 mt-3 bg-zinc-50 p-3 rounded-lg border border-zinc-200">
               <div className="space-y-1">
-                <label className="text-[9px] text-zinc-505 font-bold uppercase">Model</label>
+                <label className="text-[9px] text-zinc-555 font-bold uppercase">Model</label>
                 <select
                   value={model}
-                  onChange={(e) => updateNodeData(id, { model: e.target.value })}
+                  onChange={(e) => {
+                    saveStateToHistory();
+                    updateNodeData(id, { model: e.target.value });
+                  }}
                   className="text-xs bg-white border border-zinc-200 rounded px-2 py-1 focus:outline-none focus:border-purple-500 text-zinc-700 w-full font-medium nodrag"
                 >
                   <option value="Gemini 3.5 Flash">Gemini 3.5 Flash</option>
@@ -954,6 +1200,7 @@ export function GeminiNode({ id, data }: NodeProps) {
                     max="2"
                     step="0.1"
                     value={temperature}
+                    onMouseDown={saveStateToHistory}
                     onChange={(e) => updateNodeData(id, { temperature: parseFloat(e.target.value) })}
                     className="w-full accent-purple-600 bg-zinc-200 nodrag"
                   />
@@ -965,6 +1212,7 @@ export function GeminiNode({ id, data }: NodeProps) {
                     min="1"
                     max="8192"
                     value={maxTokens}
+                    onFocus={saveStateToHistory}
                     onChange={(e) => updateNodeData(id, { maxTokens: parseInt(e.target.value) || 2048 })}
                     className="w-full text-xs bg-white border border-zinc-200 rounded px-2 py-1 text-zinc-805 focus:outline-none focus:border-purple-500 nodrag"
                   />
@@ -979,7 +1227,6 @@ export function GeminiNode({ id, data }: NodeProps) {
           <div className="flex items-center gap-1 select-none">
             <Sparkles className="w-3.5 h-3.5 text-purple-600 animate-pulse" />
             <span className="text-[10px] text-zinc-600 font-semibold">Response</span>
-            <InfoIcon />
           </div>
           <div className="w-full min-h-[100px] max-h-56 bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 nodrag nowheel">
             {responseText ? (
@@ -1035,7 +1282,6 @@ export function ResponseNode({ id, data }: NodeProps) {
         />
         <div className="flex items-center gap-1 select-none">
           <span className="text-[10px] text-zinc-600 font-semibold">result</span>
-          <InfoIcon />
         </div>
         {result ? (
           <div className="w-full min-h-[100px] max-h-56 bg-zinc-50 border border-zinc-200 rounded-lg p-3 overflow-y-auto text-xs text-zinc-800 font-mono leading-relaxed nodrag nowheel">

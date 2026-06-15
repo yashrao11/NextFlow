@@ -94,6 +94,8 @@ export default function WorkflowCanvas() {
   const notification = useWorkflowStore((state) => state.notification);
   const clearNotification = useWorkflowStore((state) => state.clearNotification);
 
+  const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
+
   // Map onRunNode callback dynamically to avoid storing callbacks in the database
   const nodesWithCallbacks = React.useMemo(() => {
     return nodes.map((node) => {
@@ -120,6 +122,7 @@ export default function WorkflowCanvas() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onNodeDragStart={saveStateToHistory}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         isValidConnection={isConnectionValid}

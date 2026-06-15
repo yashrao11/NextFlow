@@ -21,9 +21,30 @@ import {
   ArrowDown,
   Loader2,
   ExternalLink,
+  Video as VideoIcon,
+  Volume2 as AudioIcon,
+  File as FileIcon,
+  SlidersHorizontal,
+  MoreHorizontal,
 } from 'lucide-react';
 
 const handleClass = "!w-3 !h-3 !bg-purple-500 !border-2 !border-white hover:scale-125 transition-transform shadow";
+
+const getHandleClass = (colorType: 'orange' | 'teal' | 'green' | 'blue' | 'purple' | 'pink') => {
+  const colorMap = {
+    orange: '!bg-amber-500',
+    teal: '!bg-teal-500',
+    green: '!bg-emerald-500',
+    blue: '!bg-blue-500',
+    purple: '!bg-purple-500',
+    pink: '!bg-pink-500',
+  };
+  return `!w-3 !h-3 ${colorMap[colorType]} !border-2 !border-white hover:scale-125 transition-transform shadow`;
+};
+
+const InfoIcon = () => (
+  <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-zinc-300 text-[9px] text-zinc-400 hover:text-zinc-600 transition-colors select-none ml-1.5 cursor-help font-mono font-medium">i</span>
+);
 
 // --- INLINE MARKDOWN RENDERER ---
 function MarkdownRenderer({ content }: { content: string }) {
@@ -268,7 +289,7 @@ export function RequestInputsNode({ id, data }: NodeProps) {
                   type="source"
                   position={Position.Right}
                   id={`${field.id}-${field.type}-output`}
-                  className={handleClass}
+                  className={getHandleClass(field.type === 'image' ? 'teal' : 'orange')}
                   style={{ top: '50%', right: '-22px', transform: 'translateY(-50%)' }}
                 />
               </div>
@@ -385,6 +406,28 @@ export function CropImageNode({ id, data }: NodeProps) {
     }
   }
 
+  const getConnectedValue = (handleId: string, defaultValue: number): number => {
+    const edge = edges.find((e) => e.target === id && e.targetHandle === handleId);
+    if (!edge) return defaultValue;
+    const parentNode = nodes.find((n) => n.id === edge.source);
+    if (!parentNode) return defaultValue;
+    
+    let valStr = '';
+    if (parentNode.type === 'gemini') {
+      valStr = parentNode.data.output?.response || parentNode.data.response || '';
+    } else if (parentNode.type === 'response') {
+      valStr = parentNode.data.output?.result || parentNode.data.result || '';
+    } else if (parentNode.type === 'requestInputs') {
+      const fields = parentNode.data.fields || [];
+      const fieldId = edge.sourceHandle?.split('-')[0] || '';
+      const textVal = fields.find((f: any) => f.id.startsWith(fieldId) && f.type === 'text');
+      valStr = textVal?.value || '';
+    }
+    
+    const parsed = parseInt(valStr);
+    return isNaN(parsed) ? defaultValue : parsed;
+  };
+
   const handleValChange = (field: string, val: number) => {
     const clamped = Math.max(0, Math.min(100, val));
     updateNodeData(id, {
@@ -402,30 +445,55 @@ export function CropImageNode({ id, data }: NodeProps) {
   };
 
   const renderSliderInput = (label: string, field: 'x' | 'y' | 'width' | 'height') => {
+    const handleId = `${field}-input`;
+    const isConnected = edges.some(
+      (edge) => edge.target === id && edge.targetHandle === handleId
+    );
+
+    const displayVal = isConnected ? getConnectedValue(handleId, crop[field]) : crop[field];
+
     return (
-      <div className="space-y-1">
-        <div className="flex items-center justify-between">
-          <label className="text-[10px] text-zinc-500 font-semibold uppercase">{label}</label>
-          <span className="text-[10px] font-bold text-purple-600 bg-purple-50 border border-purple-100 rounded px-1">{crop[field]}%</span>
+      <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2.5 gap-2">
+        <Handle
+          type="target"
+          position={Position.Left}
+          id={handleId}
+          className={getHandleClass('pink')}
+          style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
+        />
+        
+        <div className="flex items-center gap-1 select-none w-28 truncate">
+          <span className="text-[10px] font-semibold text-zinc-605">{label}</span>
+          <InfoIcon />
         </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={crop[field]}
-            onChange={(e) => handleValChange(field, parseInt(e.target.value) || 0)}
-            className="flex-1 accent-purple-600 bg-zinc-200 h-1 rounded-lg cursor-pointer nodrag"
-          />
-          <input
-            type="number"
-            min="0"
-            max="100"
-            value={crop[field]}
-            onChange={(e) => handleValChange(field, parseInt(e.target.value) || 0)}
-            className="w-12 text-center text-xs bg-zinc-50 border border-zinc-200 rounded px-1 py-0.5 text-zinc-800 font-medium focus:outline-none focus:border-purple-500 font-mono nodrag"
-          />
-        </div>
+
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={displayVal}
+          disabled={isConnected}
+          onChange={(e) => handleValChange(field, parseInt(e.target.value) || 0)}
+          className={`w-20 accent-purple-600 bg-zinc-200 h-1 rounded-lg cursor-pointer nodrag ${
+            isConnected ? 'opacity-40 cursor-not-allowed' : ''
+          }`}
+        />
+
+        <input
+          type="number"
+          min="0"
+          max="100"
+          value={displayVal}
+          disabled={isConnected}
+          onChange={(e) => handleValChange(field, parseInt(e.target.value) || 0)}
+          className={`w-9 text-center text-[10px] bg-white border border-zinc-200 rounded px-0.5 py-0.5 text-zinc-805 font-semibold focus:outline-none focus:border-purple-500 font-mono nodrag ${
+            isConnected ? 'opacity-40 bg-zinc-100 cursor-not-allowed' : ''
+          }`}
+        />
+
+        <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+          <Plus className="w-3 h-3" />
+        </button>
       </div>
     );
   };
@@ -436,59 +504,70 @@ export function CropImageNode({ id, data }: NodeProps) {
         data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300'
       }`}
     >
-      {/* Input Handle */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        id="image-input"
-        className={handleClass}
-        style={{ left: '-22px' }}
-      />
-
       <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100">
         <div className="flex items-center gap-2">
           <Crop className="w-4 h-4 text-blue-500" />
-          <span className="font-semibold text-xs tracking-wider uppercase text-zinc-505">
+          <span className="font-semibold text-xs text-zinc-700">
             {data.label || 'Crop Image'}
           </span>
         </div>
         
-        {/* Miniature run play button in header */}
-        <button
-          onClick={handleTriggerLocalRun}
-          disabled={data.isRunning}
-          className={`p-1.5 rounded-lg transition-all ${
-            data.isRunning 
-              ? 'bg-purple-105 text-purple-600 animate-pulse'
-              : 'hover:bg-purple-50 text-zinc-400 hover:text-purple-600'
-          }`}
-          title="Run from this node upstream"
-        >
-          {data.isRunning ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Play className="w-3.5 h-3.5 fill-current" />
-          )}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors">
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={handleTriggerLocalRun}
+            disabled={data.isRunning}
+            className={`px-2.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition-all shadow-sm ${
+              data.isRunning 
+                ? 'bg-emerald-100 text-emerald-700 animate-pulse'
+                : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+            }`}
+            title="Run from this node"
+          >
+            {data.isRunning ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <Play className="w-2.5 h-2.5 fill-current" />
+            )}
+            <span>Run</span>
+          </button>
+          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors">
+            <MoreHorizontal className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="space-y-3">
         {/* Input Image URL Field overrides when connected */}
-        <div className="space-y-1">
-          <span className="text-[9px] text-zinc-400 font-bold uppercase flex items-center justify-between">
-            Input Image URL
-            <span className="text-[8px] text-zinc-500 font-mono">handle: image-input</span>
-          </span>
-          <input
-            type="text"
-            value={isImageConnected ? '(Connected to flow input)' : imageUrl}
-            onChange={(e) => updateNodeData(id, { imageUrl: e.target.value })}
-            placeholder="Paste image URL here..."
-            disabled={isImageConnected}
-            className={`w-full text-xs bg-zinc-50 border border-zinc-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-purple-500 text-zinc-855 nodrag ${
-              isImageConnected ? 'opacity-50 bg-zinc-100 cursor-not-allowed' : ''
-            }`}
+        <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+          <Handle
+            type="target"
+            position={Position.Left}
+            id="image-input"
+            className={getHandleClass('teal')}
+            style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
           />
+          <div className="flex items-center gap-1 select-none">
+            <span className="text-[10px] font-semibold text-zinc-600">Input Image</span>
+            <span className="text-red-500 text-[10px] font-bold">*</span>
+            <InfoIcon />
+          </div>
+          
+          <button
+            disabled={isImageConnected}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
+              isImageConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
+            }`}
+          >
+            <ImageIcon className="w-3 h-3 text-zinc-400" />
+            <span>{isImageConnected ? 'Connected' : 'Upload image'}</span>
+          </button>
+          
+          <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+            <Plus className="w-3 h-3" />
+          </button>
         </div>
 
         {/* Visual Crop selection overlay inside bounding box */}
@@ -519,16 +598,35 @@ export function CropImageNode({ id, data }: NodeProps) {
           {renderSliderInput('Width (%)', 'width')}
           {renderSliderInput('Height (%)', 'height')}
         </div>
+
+        {/* Output Image Box section */}
+        <div className="border-t border-zinc-100 pt-3 space-y-1.5 relative">
+          <div className="flex items-center gap-1 select-none pl-1">
+            <span className="text-[10px] text-zinc-600 font-semibold">Output Image</span>
+            <InfoIcon />
+          </div>
+          <div className="w-full min-h-[80px] bg-zinc-50 border border-zinc-200 rounded-lg p-2 flex items-center justify-center overflow-hidden nodrag nowheel">
+            {data.output?.imageUrl || data.imageUrl ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img 
+                src={data.output?.imageUrl || data.imageUrl} 
+                alt="Cropped Output" 
+                className="max-w-full max-h-36 object-scale-down rounded border border-zinc-200 bg-white" 
+              />
+            ) : (
+              <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
+            )}
+          </div>
+          
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="image-output"
+            className={getHandleClass('teal')}
+            style={{ right: '-22px', top: '65%' }}
+          />
+        </div>
       </div>
-      
-      {/* Output Handle */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="image-output"
-        className={handleClass}
-        style={{ right: '-22px' }}
-      />
     </div>
   );
 }
@@ -553,35 +651,18 @@ export function GeminiNode({ id, data }: NodeProps) {
   const isSystemPromptConnected = edges.some(
     (edge) => edge.target === id && edge.targetHandle === 'system-text-input'
   );
-
-  // Resolve connected image inputs dynamically for vision preview
-  const incomingImageEdges = edges.filter(
-    (e) => e.target === id && e.targetHandle === 'image-input'
+  const isImageConnected = edges.some(
+    (edge) => edge.target === id && edge.targetHandle === 'image-input'
   );
-
-  const resolvedImageUrls: string[] = [];
-  incomingImageEdges.forEach((edge) => {
-    const parentNode = nodes.find((n) => n.id === edge.source);
-    if (!parentNode) return;
-
-    if (parentNode.type === 'cropImage') {
-      const croppedUrl = parentNode.data.output?.imageUrl || parentNode.data.imageUrl || '';
-      if (croppedUrl) {
-        resolvedImageUrls.push(croppedUrl);
-      }
-    } else if (parentNode.type === 'requestInputs') {
-      const fields = parentNode.data.fields || [];
-      const fieldId = edge.sourceHandle?.split('-')[0] || '';
-      const imgField = fields.find((f: any) => f.id.startsWith(fieldId) && f.type === 'image');
-      if (imgField?.value) {
-        resolvedImageUrls.push(imgField.value);
-      }
-    }
-  });
-
-  if (data.imageUrl && !resolvedImageUrls.includes(data.imageUrl)) {
-    resolvedImageUrls.push(data.imageUrl);
-  }
+  const isVideoConnected = edges.some(
+    (edge) => edge.target === id && edge.targetHandle === 'video-input'
+  );
+  const isAudioConnected = edges.some(
+    (edge) => edge.target === id && edge.targetHandle === 'audio-input'
+  );
+  const isFileConnected = edges.some(
+    (edge) => edge.target === id && edge.targetHandle === 'file-input'
+  );
 
   // Run downstream from this node
   const handleTriggerLocalRun = () => {
@@ -595,69 +676,64 @@ export function GeminiNode({ id, data }: NodeProps) {
         data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300'
       }`}
     >
-      {/* Input Handles (Left) */}
-      <div className="relative">
-        <Handle type="target" position={Position.Left} id="prompt-text-input" className={handleClass} style={{ left: '-22px', top: '50px' }} />
-        <Handle type="target" position={Position.Left} id="system-text-input" className={handleClass} style={{ left: '-22px', top: '80px' }} />
-        <Handle type="target" position={Position.Left} id="image-input" className={handleClass} style={{ left: '-22px', top: '110px' }} />
-        <Handle type="target" position={Position.Left} id="video-input" className={handleClass} style={{ left: '-22px', top: '140px' }} />
-        <Handle type="target" position={Position.Left} id="audio-input" className={handleClass} style={{ left: '-22px', top: '170px' }} />
-        <Handle type="target" position={Position.Left} id="file-input" className={handleClass} style={{ left: '-22px', top: '200px' }} />
-      </div>
-
       <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100">
         <div className="flex items-center gap-2">
-          <Brain className="w-4 h-4 text-purple-605" />
-          <span className="font-semibold text-xs tracking-wider uppercase text-zinc-505">
+          <Brain className="w-4 h-4 text-purple-600" />
+          <span className="font-semibold text-xs text-zinc-700">
             {data.label || 'Gemini 3.1 Pro'}
           </span>
         </div>
         
-        {/* Miniature run play button in header */}
-        <button
-          onClick={handleTriggerLocalRun}
-          disabled={data.isRunning}
-          className={`p-1.5 rounded-lg transition-all ${
-            data.isRunning 
-              ? 'bg-purple-105 text-purple-600 animate-pulse'
-              : 'hover:bg-purple-50 text-zinc-400 hover:text-purple-600'
-          }`}
-          title="Run from this node upstream"
-        >
-          {data.isRunning ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Play className="w-3.5 h-3.5 fill-current" />
-          )}
-        </button>
-      </div>
-
-      <div className="flex flex-col bg-zinc-50 border border-zinc-200/80 rounded-lg p-2.5 mb-3 gap-1.5">
-        <select
-          value={model}
-          onChange={(e) => updateNodeData(id, { model: e.target.value })}
-          className="text-xs bg-white border border-zinc-200 rounded px-2 py-1.2 focus:outline-none focus:border-purple-500 text-zinc-708 w-full font-medium nodrag"
-        >
-          <option value="Gemini 3.5 Flash">Gemini 3.5 Flash</option>
-          <option value="Gemini 3.1 Pro">Gemini 3.1 Pro</option>
-          <option value="Gemini 3.1 Flash-Lite">Gemini 3.1 Flash-Lite</option>
-          <option value="Gemini 2.5 Pro">Gemini 2.5 Pro</option>
-          <option value="Gemini 2.5 Flash">Gemini 2.5 Flash</option>
-        </select>
+        <div className="flex items-center gap-1.5">
+          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors">
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={handleTriggerLocalRun}
+            disabled={data.isRunning}
+            className={`px-2.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition-all shadow-sm ${
+              data.isRunning 
+                ? 'bg-emerald-100 text-emerald-700 animate-pulse'
+                : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+            }`}
+            title="Run from this node"
+          >
+            {data.isRunning ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <Play className="w-2.5 h-2.5 fill-current" />
+            )}
+            <span>Run</span>
+          </button>
+          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors">
+            <MoreHorizontal className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="space-y-4">
         {/* Core Prompt Inputs */}
         <div className="space-y-3">
-          <div className="space-y-1 pl-1">
-            <span className="text-[9px] text-zinc-400 font-bold uppercase flex items-center justify-between">
-              Prompt (Required)
-              <span className="text-[8px] text-zinc-500 font-mono">handle: prompt-text-input</span>
-            </span>
+          {/* Prompt (Required) Input row */}
+          <div className="relative space-y-1.5 pl-1">
+            <Handle
+              type="target"
+              position={Position.Left}
+              id="prompt-text-input"
+              className={getHandleClass('orange')}
+              style={{ left: '-22px', top: '10px' }}
+            />
+            <div className="flex items-center gap-1 select-none">
+              <span className="text-[10px] text-zinc-600 font-semibold uppercase tracking-wider">
+                Prompt
+              </span>
+              <span className="text-red-500 text-[10px] font-bold">*</span>
+              <InfoIcon />
+            </div>
             <textarea
               value={isPromptConnected ? '(Connected to flow input)' : prompt}
               onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
-              placeholder="Describe what Gemini should do..."
+              placeholder="Enter your prompt..."
               disabled={isPromptConnected}
               className={`w-full text-xs bg-zinc-50 border border-zinc-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-purple-500 resize-y text-zinc-900 min-h-[50px] nodrag nowheel ${
                 isPromptConnected ? 'opacity-50 bg-zinc-100 cursor-not-allowed font-medium' : ''
@@ -665,11 +741,26 @@ export function GeminiNode({ id, data }: NodeProps) {
             />
           </div>
 
-          <div className="space-y-1 pl-1">
-            <span className="text-[9px] text-zinc-400 font-bold uppercase flex items-center justify-between">
-              System Prompt
-              <span className="text-[8px] text-zinc-500 font-mono">handle: system-text-input</span>
-            </span>
+          {/* System Prompt Input row */}
+          <div className="relative space-y-1.5 pl-1">
+            <Handle
+              type="target"
+              position={Position.Left}
+              id="system-text-input"
+              className={getHandleClass('orange')}
+              style={{ left: '-22px', top: '10px' }}
+            />
+            <div className="flex items-center justify-between select-none">
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-zinc-600 font-semibold uppercase tracking-wider">
+                  System Prompt
+                </span>
+                <InfoIcon />
+              </div>
+              <button className="p-0.5 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
             <textarea
               value={isSystemPromptConnected ? '(Connected to flow input)' : systemPrompt}
               onChange={(e) => updateNodeData(id, { systemPrompt: e.target.value })}
@@ -679,6 +770,122 @@ export function GeminiNode({ id, data }: NodeProps) {
                 isSystemPromptConnected ? 'opacity-50 bg-zinc-100 cursor-not-allowed font-medium' : ''
               }`}
             />
+          </div>
+
+          {/* Image (Vision) Input row */}
+          <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+            <Handle
+              type="target"
+              position={Position.Left}
+              id="image-input"
+              className={getHandleClass('teal')}
+              style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
+            />
+            <div className="flex items-center gap-1 select-none">
+              <span className="text-[10px] font-semibold text-zinc-600">Image (Vision)</span>
+              <InfoIcon />
+            </div>
+            
+            <button
+              disabled={isImageConnected}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
+                isImageConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
+              }`}
+            >
+              <ImageIcon className="w-3 h-3 text-zinc-400" />
+              <span>{isImageConnected ? 'Connected' : 'Upload image'}</span>
+            </button>
+            
+            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* Video Input row */}
+          <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+            <Handle
+              type="target"
+              position={Position.Left}
+              id="video-input"
+              className={getHandleClass('green')}
+              style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
+            />
+            <div className="flex items-center gap-1 select-none">
+              <span className="text-[10px] font-semibold text-zinc-600">Video</span>
+              <InfoIcon />
+            </div>
+            
+            <button
+              disabled={isVideoConnected}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
+                isVideoConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
+              }`}
+            >
+              <VideoIcon className="w-3 h-3 text-zinc-400" />
+              <span>{isVideoConnected ? 'Connected' : 'Upload video'}</span>
+            </button>
+            
+            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* Audio Input row */}
+          <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+            <Handle
+              type="target"
+              position={Position.Left}
+              id="audio-input"
+              className={getHandleClass('blue')}
+              style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
+            />
+            <div className="flex items-center gap-1 select-none">
+              <span className="text-[10px] font-semibold text-zinc-600">Audio</span>
+              <InfoIcon />
+            </div>
+            
+            <button
+              disabled={isAudioConnected}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
+                isAudioConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
+              }`}
+            >
+              <AudioIcon className="w-3 h-3 text-zinc-400" />
+              <span>{isAudioConnected ? 'Connected' : 'Upload audio'}</span>
+            </button>
+            
+            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* File Input row */}
+          <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+            <Handle
+              type="target"
+              position={Position.Left}
+              id="file-input"
+              className={getHandleClass('purple')}
+              style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
+            />
+            <div className="flex items-center gap-1 select-none">
+              <span className="text-[10px] font-semibold text-zinc-600">File</span>
+              <InfoIcon />
+            </div>
+            
+            <button
+              disabled={isFileConnected}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
+                isFileConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
+              }`}
+            >
+              <FileIcon className="w-3 h-3 text-zinc-400" />
+              <span>{isFileConnected ? 'Connected' : 'Upload file'}</span>
+            </button>
+            
+            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
+              <Plus className="w-3 h-3" />
+            </button>
           </div>
         </div>
 
@@ -690,66 +897,63 @@ export function GeminiNode({ id, data }: NodeProps) {
           >
             <span className="flex items-center gap-1.5 font-medium">
               <Settings className="w-3.5 h-3.5" />
-              Advanced Settings
+              Settings
             </span>
             {showSettings ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
 
           {showSettings && (
-            <div className="grid grid-cols-2 gap-3 mt-3 bg-zinc-50 p-3 rounded-lg border border-zinc-200">
+            <div className="space-y-3 mt-3 bg-zinc-50 p-3 rounded-lg border border-zinc-200">
               <div className="space-y-1">
-                <label className="text-[9px] text-zinc-500 font-bold uppercase">Temp ({temperature})</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                  value={temperature}
-                  onChange={(e) => updateNodeData(id, { temperature: parseFloat(e.target.value) })}
-                  className="w-full accent-purple-600 bg-zinc-200 nodrag"
-                />
+                <label className="text-[9px] text-zinc-505 font-bold uppercase">Model</label>
+                <select
+                  value={model}
+                  onChange={(e) => updateNodeData(id, { model: e.target.value })}
+                  className="text-xs bg-white border border-zinc-200 rounded px-2 py-1 focus:outline-none focus:border-purple-500 text-zinc-700 w-full font-medium nodrag"
+                >
+                  <option value="Gemini 3.5 Flash">Gemini 3.5 Flash</option>
+                  <option value="Gemini 3.1 Pro">Gemini 3.1 Pro</option>
+                  <option value="Gemini 3.1 Flash-Lite">Gemini 3.1 Flash-Lite</option>
+                  <option value="Gemini 2.5 Pro">Gemini 2.5 Pro</option>
+                  <option value="Gemini 2.5 Flash">Gemini 2.5 Flash</option>
+                </select>
               </div>
-              <div className="space-y-1">
-                <label className="text-[9px] text-zinc-550 font-bold uppercase">Max Tokens</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="8192"
-                  value={maxTokens}
-                  onChange={(e) => updateNodeData(id, { maxTokens: parseInt(e.target.value) || 2048 })}
-                  className="w-full text-xs bg-white border border-zinc-200 rounded px-2 py-1 text-zinc-805 focus:outline-none focus:border-purple-500 nodrag"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[9px] text-zinc-500 font-bold uppercase">Temp ({temperature})</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={temperature}
+                    onChange={(e) => updateNodeData(id, { temperature: parseFloat(e.target.value) })}
+                    className="w-full accent-purple-600 bg-zinc-200 nodrag"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] text-zinc-550 font-bold uppercase">Max Tokens</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="8192"
+                    value={maxTokens}
+                    onChange={(e) => updateNodeData(id, { maxTokens: parseInt(e.target.value) || 2048 })}
+                    className="w-full text-xs bg-white border border-zinc-200 rounded px-2 py-1 text-zinc-805 focus:outline-none focus:border-purple-500 nodrag"
+                  />
+                </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* Image (Vision) Multi-image side-by-side layout list */}
-        {resolvedImageUrls.length > 0 && (
-          <div className="border-t border-zinc-100 pt-3 space-y-1.5">
-            <span className="text-[10px] text-zinc-505 font-semibold uppercase block pl-1">
-              Image (Vision)
-            </span>
-            <div className="flex flex-col items-center gap-2.5 nodrag nowheel">
-              {resolvedImageUrls.map((url, idx) => (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  key={idx}
-                  src={url}
-                  alt={`Vision Input ${idx + 1}`}
-                  className="max-w-full max-h-48 object-scale-down rounded-lg border border-zinc-200 bg-zinc-50 nodrag"
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Response preview */}
-        <div className="border-t border-zinc-100 pt-3 space-y-1.5">
-          <span className="text-[9px] text-zinc-455 font-bold uppercase flex items-center gap-1">
-            <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-            Response
-          </span>
+        <div className="border-t border-zinc-100 pt-3 space-y-1.5 relative">
+          <div className="flex items-center gap-1 select-none">
+            <Sparkles className="w-3.5 h-3.5 text-purple-600 animate-pulse" />
+            <span className="text-[10px] text-zinc-600 font-semibold">Response</span>
+            <InfoIcon />
+          </div>
           <div className="w-full min-h-[100px] max-h-56 bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 nodrag nowheel">
             {responseText ? (
               <MarkdownRenderer content={responseText} />
@@ -757,17 +961,16 @@ export function GeminiNode({ id, data }: NodeProps) {
               <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
             )}
           </div>
+          
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="response-text-output"
+            className={getHandleClass('orange')}
+            style={{ right: '-22px', top: '65%' }}
+          />
         </div>
       </div>
-
-      {/* Output Handle */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="response-text-output"
-        className={handleClass}
-        style={{ right: '-22px', top: '50%' }}
-      />
     </div>
   );
 }
@@ -786,29 +989,27 @@ export function ResponseNode({ id, data }: NodeProps) {
         data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300'
       }`}
     >
-      {/* Input Handle */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        id="result-input"
-        className={handleClass}
-        style={{ left: '-22px' }}
-      />
-
       <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100">
         <div className="flex items-center gap-2">
           <Play className="w-4 h-4 text-emerald-600" />
-          <span className="font-semibold text-xs tracking-wider uppercase text-zinc-505">
+          <span className="font-semibold text-xs text-zinc-700">
             {data.label || 'Response'}
           </span>
         </div>
-        <span className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-250 px-2 py-0.5 rounded-full font-mono font-semibold">
-          SYSTEM
-        </span>
       </div>
 
-      <div className="space-y-2">
-        <span className="text-[9px] text-zinc-400 font-bold uppercase">Output Result</span>
+      <div className="space-y-2 relative">
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="result-input"
+          className={getHandleClass('orange')}
+          style={{ left: '-22px', top: '10px' }}
+        />
+        <div className="flex items-center gap-1 select-none">
+          <span className="text-[10px] text-zinc-600 font-semibold">result</span>
+          <InfoIcon />
+        </div>
         {result ? (
           <div className="w-full min-h-[100px] max-h-56 bg-zinc-50 border border-zinc-200 rounded-lg p-3 overflow-y-auto text-xs text-zinc-800 font-mono leading-relaxed nodrag nowheel">
             {isBase64Image(result) ? (

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Play, Save, Edit3, Loader2, Check, History, X } from 'lucide-react';
+import { ArrowLeft, Play, Save, Edit3, Loader2, Check, History, X, Download, Upload } from 'lucide-react';
 import { useWorkflowStore } from '@/store/useWorkflowStore';
 import WorkflowCanvas from '@/components/canvas/WorkflowCanvas';
 import { ReactFlowProvider } from 'reactflow';
@@ -323,6 +323,67 @@ export default function WorkflowBuilderPage() {
       setIsExecuting(false);
     }
   };
+  
+  // --- EXPORT AND IMPORT WORKFLOW AS JSON ---
+  const handleExportWorkflow = () => {
+    const workflowData = {
+      name,
+      nodes,
+      edges,
+    };
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(workflowData, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `${name.toLowerCase().replace(/\s+/g, '_')}_workflow.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
+  const handleImportWorkflow = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result as string);
+        if (!imported.nodes || !imported.edges) {
+          alert("Invalid workflow file format: Must contain nodes and edges");
+          return;
+        }
+
+        // Ensure requestInputs and response are not deleted and remain sanitized
+        const sanitizedNodes = imported.nodes.map((n: any) => {
+          if (n.id === 'request-inputs' || n.id === 'response') {
+            return { ...n, deletable: false };
+          }
+          return n;
+        });
+
+        // Validate it contains request-inputs and response
+        const hasRequestInputs = sanitizedNodes.some((n: any) => n.id === 'request-inputs');
+        const hasResponse = sanitizedNodes.some((n: any) => n.id === 'response');
+        if (!hasRequestInputs || !hasResponse) {
+          alert("Invalid workflow: Must contain 'request-inputs' and 'response' nodes");
+          return;
+        }
+
+        if (imported.name) {
+          setName(imported.name);
+        }
+        setNodes(sanitizedNodes);
+        setEdges(imported.edges);
+
+        alert("Workflow imported successfully! Click 'Save Flow' to persist changes.");
+      } catch (err) {
+        console.error("Failed to parse JSON file:", err);
+        alert("Failed to parse workflow file. Ensure it is a valid JSON file.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
 
   // --- RESET WORKFLOW OUTPUTS & INPUTS ---
   const handleResetWorkflow = async () => {
@@ -449,6 +510,31 @@ export default function WorkflowBuilderPage() {
 
         {/* CONTROLS BUTTONS */}
         <div className="flex items-center gap-3">
+          {/* Export JSON Button */}
+          <button
+            onClick={handleExportWorkflow}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-700 transition-all cursor-pointer"
+            title="Export workflow as JSON"
+          >
+            <Download className="w-3.5 h-3.5 text-zinc-650" />
+            <span>Export JSON</span>
+          </button>
+
+          {/* Import JSON Button */}
+          <label
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-700 transition-all cursor-pointer"
+            title="Import workflow JSON file"
+          >
+            <Upload className="w-3.5 h-3.5 text-zinc-650" />
+            <span>Import JSON</span>
+            <input
+              type="file"
+              accept=".json"
+              onChange={handleImportWorkflow}
+              className="hidden"
+            />
+          </label>
+
           {/* Reset Button */}
           <button
             onClick={handleResetWorkflow}

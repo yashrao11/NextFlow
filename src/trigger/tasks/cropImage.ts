@@ -34,10 +34,8 @@ export const cropImageTask = task({
 
       return { imageUrl: base64Result };
     } catch (err) {
-      console.error("[DEBUG] Jimp crop failed. Using high-fidelity placeholder fallback:", err);
-      // Fallback cropped placeholder (Headphones product shot)
-      const fallbackUrl = "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=500&auto=format&fit=crop&q=60";
-      return { imageUrl: fallbackUrl };
+      console.error("[DEBUG] Jimp crop failed:", err);
+      throw err;
     }
   },
 });

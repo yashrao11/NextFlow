@@ -30,14 +30,27 @@ export const geminiPromptTask = task({
 
         if (payload.images && payload.images.length > 0) {
           for (const imgUrl of payload.images) {
-            const response = await fetch(imgUrl);
-            const buffer = await response.arrayBuffer();
-            contents.push({
-              inlineData: {
-                data: Buffer.from(buffer).toString("base64"),
-                mimeType: "image/jpeg"
+            if (imgUrl.startsWith('data:image/')) {
+              let cleanBase64 = imgUrl;
+              if (cleanBase64.includes(',')) {
+                cleanBase64 = cleanBase64.split(',')[1];
               }
-            });
+              contents.push({
+                inlineData: {
+                  data: cleanBase64,
+                  mimeType: 'image/png'
+                }
+              });
+            } else {
+              const response = await fetch(imgUrl);
+              const buffer = await response.arrayBuffer();
+              contents.push({
+                inlineData: {
+                  data: Buffer.from(buffer).toString("base64"),
+                  mimeType: "image/jpeg"
+                }
+              });
+            }
           }
         }
 

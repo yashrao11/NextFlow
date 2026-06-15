@@ -5,7 +5,7 @@ export const cropImageTask = task({
   id: "crop-image",
   run: async (payload: { imageUrl: string; x: number; y: number; width: number; height: number }) => {
     // 1. MANDATORY 30-second artificial delay
-    await new Promise((resolve) => setTimeout(resolve, 30000));
+    await new Promise((resolve) => setTimeout(resolve, 31000));
 
     console.log("[DEBUG] Starting live crop-image task using Jimp.", payload);
 

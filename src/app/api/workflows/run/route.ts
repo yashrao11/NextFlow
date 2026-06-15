@@ -70,6 +70,9 @@ async function pollTriggerRun(runId: string, fallbackTask: () => Promise<any>): 
 
 // --- LOCAL FALLBACK CROPPING ---
 async function localCropFallback(imageUrl: string, x: number, y: number, width: number, height: number): Promise<any> {
+  // 1. MANDATORY 30-second artificial delay
+  await new Promise((resolve) => setTimeout(resolve, 31000));
+
   console.log("[DEBUG] Local fallback: Starting crop using Jimp.", { imageUrl: imageUrl.substring(0, 50), x, y, width, height });
   try {
     let inputBuffer: Buffer | string = imageUrl;

@@ -164,8 +164,11 @@ async function localGeminiFallback(
         systemInstruction: systemPrompt || undefined,
       });
 
-      // Prepare request payload content structures
-      const contents: any[] = [prompt];
+      // Prepare request payload content structures using Part objects (wrapping text inside { text: ... })
+      // This prevents mixing plain string prompts and inlineData objects, which causes Google 400 error.
+      const parts: any[] = [
+        { text: prompt }
+      ];
       if (images && images.length > 0) {
         for (const imgUrl of images) {
           if (imgUrl.startsWith('data:image/')) {
@@ -173,7 +176,7 @@ async function localGeminiFallback(
             if (cleanBase64.includes(',')) {
               cleanBase64 = cleanBase64.split(',')[1];
             }
-            contents.push({
+            parts.push({
               inlineData: {
                 data: cleanBase64,
                 mimeType: 'image/png',
@@ -182,7 +185,7 @@ async function localGeminiFallback(
           } else {
             const response = await fetch(imgUrl);
             const buffer = await response.arrayBuffer();
-            contents.push({
+            parts.push({
               inlineData: {
                 data: Buffer.from(buffer).toString('base64'),
                 mimeType: 'image/jpeg',
@@ -198,7 +201,7 @@ async function localGeminiFallback(
         if (cleanBase64.includes(',')) {
           cleanBase64 = cleanBase64.split(',')[1];
         }
-        contents.push({
+        parts.push({
           inlineData: {
             data: cleanBase64,
             mimeType: video.type || 'video/mp4',
@@ -212,7 +215,7 @@ async function localGeminiFallback(
         if (cleanBase64.includes(',')) {
           cleanBase64 = cleanBase64.split(',')[1];
         }
-        contents.push({
+        parts.push({
           inlineData: {
             data: cleanBase64,
             mimeType: audio.type || 'audio/mp3',
@@ -226,7 +229,7 @@ async function localGeminiFallback(
         if (cleanBase64.includes(',')) {
           cleanBase64 = cleanBase64.split(',')[1];
         }
-        contents.push({
+        parts.push({
           inlineData: {
             data: cleanBase64,
             mimeType: file.type || 'application/pdf',
@@ -235,7 +238,7 @@ async function localGeminiFallback(
       }
 
       // Execute generative AI request
-      const result = await model.generateContent(contents);
+      const result = await model.generateContent({ contents: parts });
       responseText = result.response.text();
       console.log(`[DEBUG] Local fallback: Live API execution succeeded with model: ${candidateModel}`);
       break;

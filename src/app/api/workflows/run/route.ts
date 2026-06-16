@@ -144,14 +144,33 @@ async function localGeminiFallback(
 
   const genAI = new GoogleGenerativeAI(apiKey);
   
-  // Model candidates fallback list
-  const modelCandidates = [
+  // Map UI model display name options to Google Generative AI API IDs
+  const modelMap: Record<string, string> = {
+    "Gemini 3.5 Flash": "gemini-3.5-flash",
+    "Gemini 3.1 Pro": "gemini-3.1-pro",
+    "Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
+    "Gemini 2.5 Pro": "gemini-2.5-pro",
+    "Gemini 2.5 Flash": "gemini-2.5-flash",
+    "gemini-3.5-flash": "gemini-3.5-flash",
+    "gemini-3.1-pro": "gemini-3.1-pro",
+    "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+    "gemini-2.5-pro": "gemini-2.5-pro",
+    "gemini-2.5-flash": "gemini-2.5-flash"
+  };
+
+  const selectedModelId = modelMap[modelName || ""] || "gemini-3.1-flash-lite";
+
+  // Build candidates list, prioritizing the selected model first
+  const modelCandidates = Array.from(new Set([
+    selectedModelId,
+    "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.1-pro",
-    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
-    "gemini-2.5-pro"
-  ];
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-2.0-pro"
+  ]));
 
   let lastError: any = null;
   let responseText = "";
@@ -501,6 +520,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                 prompt,
                 systemPrompt,
                 images,
+                model: node.data?.model || 'Gemini 3.1 Pro',
               };
 
               if (video) {

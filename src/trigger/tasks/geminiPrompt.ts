@@ -119,7 +119,7 @@ export const geminiPromptTask = task({
         const model = genAI.getGenerativeModel({ model: modelName });
 
         const result = await model.generateContent({
-          contents: parts,
+          contents: [{ role: "user", parts }],
           systemInstruction: payload.systemPrompt
         });
 

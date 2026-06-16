@@ -238,7 +238,9 @@ async function localGeminiFallback(
       }
 
       // Execute generative AI request
-      const result = await model.generateContent({ contents: parts });
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts }]
+      });
       responseText = result.response.text();
       console.log(`[DEBUG] Local fallback: Live API execution succeeded with model: ${candidateModel}`);
       break;

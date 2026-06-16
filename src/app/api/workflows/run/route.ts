@@ -10,7 +10,14 @@ import { Jimp } from 'jimp';
 
 const execAsync = promisify(exec);
 
-// --- HELPER TO COLLECT ALL UPSTREAM ANCESTORS ---
+/**
+ * Traverses backwards through connected edges to collect all ancestor node IDs
+ * of a given starting node. Used for scope validation and caching.
+ *
+ * @param startNodeId The target node to trace ancestors from.
+ * @param edges Array of react-flow edges representing connection links.
+ * @returns A set of unique ancestor node IDs.
+ */
 function getAncestors(startNodeId: string, edges: any[]): Set<string> {
   const ancestors = new Set<string>();
   const queue = [startNodeId];
@@ -29,10 +36,19 @@ function getAncestors(startNodeId: string, edges: any[]): Set<string> {
   return ancestors;
 }
 
-// --- HELPER TO POLL TRIGGER.DEV RUN STATE WITH LOCAL FALLBACK ---
+/**
+ * Polls the Trigger.dev API for the execution status of a background task.
+ * If the API key is not configured, or if the polling attempts timeout, 
+ * the poll falls back to executing the task synchronously on the local backend.
+ *
+ * @param runId Trigger.dev run ID to check.
+ * @param fallbackTask Callback execution if API polling fails or keys are missing.
+ * @returns The resolved output of the completed task.
+ */
 async function pollTriggerRun(runId: string, fallbackTask: () => Promise<any>): Promise<any> {
   const apiKey = process.env.TRIGGER_API_KEY;
 
+  // If Trigger.dev credentials are missing or unconfigured, execute task locally as fallback
   if (!apiKey || apiKey.startsWith('tr_dev_dummy')) {
     console.warn('[Run Poller] Trigger.dev API key missing, executing task locally as fallback.');
     return await fallbackTask();
@@ -42,6 +58,7 @@ async function pollTriggerRun(runId: string, fallbackTask: () => Promise<any>): 
   const maxAttempts = isDev ? 4 : 30;
   const delayMs = isDev ? 1000 : 3000;
 
+  // Poll status periodically until completion or failure
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const run = await runs.retrieve(runId);
@@ -68,9 +85,13 @@ async function pollTriggerRun(runId: string, fallbackTask: () => Promise<any>): 
   return await fallbackTask();
 }
 
-// --- LOCAL FALLBACK CROPPING ---
+/**
+ * localCropFallback
+ * Performs synchronous image cropping using Jimp on the local server.
+ * Simulates a background worker execution with a mandatory 30-second sleep.
+ */
 async function localCropFallback(imageUrl: string, x: number, y: number, width: number, height: number): Promise<any> {
-  // 1. MANDATORY 30-second artificial delay
+  // Simulate heavy computation delay
   await new Promise((resolve) => setTimeout(resolve, 30000));
 
   console.log("[DEBUG] Local fallback: Starting crop using Jimp.", { imageUrl: imageUrl.substring(0, 50), x, y, width, height });
@@ -85,6 +106,7 @@ async function localCropFallback(imageUrl: string, x: number, y: number, width: 
     const imgWidth = image.bitmap.width;
     const imgHeight = image.bitmap.height;
 
+    // Convert percentages to absolute pixel bounds
     const cropX = Math.max(0, Math.min(imgWidth - 1, Math.round((x / 100) * imgWidth)));
     const cropY = Math.max(0, Math.min(imgHeight - 1, Math.round((y / 100) * imgHeight)));
     const cropW = Math.max(1, Math.min(imgWidth - cropX, Math.round((width / 100) * imgWidth)));
@@ -101,7 +123,11 @@ async function localCropFallback(imageUrl: string, x: number, y: number, width: 
   }
 }
 
-// --- LOCAL FALLBACK GEMINI PROMPT ---
+/**
+ * localGeminiFallback
+ * Executes Google Generative AI API calls directly from the local server.
+ * Sequentially tests various active model candidates to ensure robust fallbacks.
+ */
 async function localGeminiFallback(
   prompt: string,
   systemPrompt: string,
@@ -118,6 +144,7 @@ async function localGeminiFallback(
 
   const genAI = new GoogleGenerativeAI(apiKey);
   
+  // Model candidates fallback list
   const modelCandidates = [
     "gemini-3.5-flash",
     "gemini-3.1-pro",
@@ -137,6 +164,7 @@ async function localGeminiFallback(
         systemInstruction: systemPrompt || undefined,
       });
 
+      // Prepare request payload content structures
       const contents: any[] = [prompt];
       if (images && images.length > 0) {
         for (const imgUrl of images) {
@@ -164,6 +192,7 @@ async function localGeminiFallback(
         }
       }
 
+      // Convert optional video payload
       if (video && video.data) {
         let cleanBase64 = video.data;
         if (cleanBase64.includes(',')) {
@@ -177,6 +206,7 @@ async function localGeminiFallback(
         });
       }
 
+      // Convert optional audio payload
       if (audio && audio.data) {
         let cleanBase64 = audio.data;
         if (cleanBase64.includes(',')) {
@@ -190,6 +220,7 @@ async function localGeminiFallback(
         });
       }
 
+      // Convert optional document file payload
       if (file && file.data) {
         let cleanBase64 = file.data;
         if (cleanBase64.includes(',')) {
@@ -203,6 +234,7 @@ async function localGeminiFallback(
         });
       }
 
+      // Execute generative AI request
       const result = await model.generateContent(contents);
       responseText = result.response.text();
       console.log(`[DEBUG] Local fallback: Live API execution succeeded with model: ${candidateModel}`);
@@ -220,12 +252,18 @@ async function localGeminiFallback(
   return { response: responseText };
 }
 
-// --- HELPER TO RESOLVE INCOMING NODE INPUTS FROM COMPLETED PARENTS ---
+/**
+ * resolveNodeInputs
+ * Walks back through connected edges to collect execution outputs from parent nodes.
+ * Maps parent node outputs directly into parameter keys expected by the downstream node.
+ * Uses historical workflow runs as cache if parents did not run in this execution scope.
+ */
 async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promise<any> {
   const parentEdges = edges.filter((e) => e.target === node.id);
   const inputs: any = {};
 
   for (const edge of parentEdges) {
+    // 1. Look for output from the current run
     const parentExecution = await prisma.nodeExecution.findFirst({
       where: { runId, nodeId: edge.source },
     });
@@ -235,6 +273,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
     if (parentExecution && parentExecution.status === 'SUCCESS') {
       parentOutput = parentExecution.output as any;
     } else {
+      // 2. If parent was skipped in a partial run, query the last succeeded run for cache output
       const currentRun = await prisma.run.findUnique({
         where: { id: runId },
         select: { workflowId: true }
@@ -258,6 +297,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       continue;
     }
 
+    // 3. Map parent handles to expected target handle parameter slots
     if (edge.targetHandle === 'image-input') {
       if (!inputs.images) inputs.images = [];
       let imgUrl = '';
@@ -347,24 +387,32 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
 }
 
 // --- BACKGROUND PARALLEL DAG ORCHESTRATOR ---
+/**
+ * executeWorkflowBackground
+ * Parallel topological scheduler loop executing workflow nodes in the background.
+ * Periodically searches for PENDING nodes whose active parent nodes have succeeded,
+ * triggering async background processes or invoking API fallbacks accordingly.
+ */
 async function executeWorkflowBackground(runId: string, nodesToExecute: any[], edgesToExecute: any[]) {
   const startTime = Date.now();
   const activeNodeIds = new Set<string>();
 
   try {
     while (true) {
+      // 1. Fetch current status of node executions in this run
       const executions = await prisma.nodeExecution.findMany({
         where: { runId },
       });
 
+      // Break if all scope nodes have finished processing (either success or failed)
       const finished = executions.filter((e) => e.status === 'SUCCESS' || e.status === 'FAILED');
       if (finished.length === executions.length) {
         break;
       }
 
+      // Stop workflow execution immediately if any node failed
       const failedNode = executions.find((e) => e.status === 'FAILED');
       if (failedNode) {
-        // Upstream failure, skip pending nodes and set to FAILED
         await prisma.nodeExecution.updateMany({
           where: { runId, status: 'PENDING' },
           data: { status: 'FAILED', errorMessage: 'Skipped due to upstream failure.' },
@@ -372,7 +420,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
         throw new Error('Workflow execution stopped due to task failure.');
       }
 
-      // Ready nodes: PENDING status and all upstream direct parent nodes in execution scope are SUCCESS
+      // 2. Identify ready nodes (status PENDING, not currently running, and all parent dependencies are SUCCESS)
       const readyExecutions = [];
       for (const ex of executions) {
         if (ex.status !== 'PENDING' || activeNodeIds.has(ex.nodeId)) continue;
@@ -388,13 +436,14 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
         }
       }
 
-      // Start executing ready nodes asynchronously without blocking
+      // 3. Launch ready nodes concurrently
       for (const ex of readyExecutions) {
         activeNodeIds.add(ex.nodeId);
 
         (async () => {
           const nodeStartTime = Date.now();
           try {
+            // Mark node status as RUNNING in DB
             await prisma.nodeExecution.update({
               where: { id: ex.id },
               data: { status: 'RUNNING' },
@@ -404,6 +453,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
             const resolvedInputs = await resolveNodeInputs(node, runId, edgesToExecute);
             let output: any = {};
 
+            // Execute code logic by Node Type
             if (node.type === 'requestInputs') {
               output = { fields: node.data?.fields || [] };
             } else if (node.type === 'response') {
@@ -418,6 +468,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                 height: typeof cropData.height === 'number' ? cropData.height : 100,
               };
 
+              // Trigger async crop task using Trigger.dev v3
               const triggerRun = await tasks.trigger('crop-image', {
                 imageUrl,
                 x: crop.x,
@@ -426,6 +477,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                 height: crop.height,
               });
 
+              // Poll status or fall back to local execution
               output = await pollTriggerRun(triggerRun.id, () =>
                 localCropFallback(imageUrl, crop.x, crop.y, crop.width, crop.height)
               );
@@ -456,8 +508,10 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                 triggerPayload.file = typeof file === 'string' ? { data: file, type: 'application/pdf' } : { data: file.data, type: file.type };
               }
 
+              // Trigger async Gemini prompt task using Trigger.dev v3
               const triggerRun = await tasks.trigger('gemini-prompt', triggerPayload);
 
+              // Poll status or fall back to local execution
               output = await pollTriggerRun(triggerRun.id, () =>
                 localGeminiFallback(
                   prompt,
@@ -472,6 +526,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
             }
 
             const duration = (Date.now() - nodeStartTime) / 1000;
+            // Node execution succeeded, update output state in DB
             await prisma.nodeExecution.update({
               where: { id: ex.id },
               data: {
@@ -483,6 +538,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
           } catch (nodeErr: any) {
             console.error(`Node ${ex.nodeId} execution failed:`, nodeErr);
             const duration = (Date.now() - nodeStartTime) / 1000;
+            // Node execution failed, update failure logs in DB
             await prisma.nodeExecution.update({
               where: { id: ex.id },
               data: {
@@ -507,6 +563,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
     const totalDuration = (Date.now() - startTime) / 1000;
     const hasFailed = finalExecutions.some((e) => e.status === 'FAILED');
 
+    // Update workflow run state to SUCCESS or FAILED in database
     await prisma.run.update({
       where: { id: runId },
       data: {
@@ -527,8 +584,14 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
   }
 }
 
+/**
+ * POST /api/workflows/run
+ * Initiates a full or partial workflow execution run.
+ * Creates execution tracking tables in PostgreSQL and fires off the background orchestrator.
+ */
 export async function POST(req: Request) {
   try {
+    // 1. Parse trigger body parameters
     const body = await req.json();
     const { workflowId, nodeId, scope = 'FULL' } = body;
 
@@ -544,18 +607,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
     }
 
+    // 2. Parse nodes and edges from json workflow fields
     const nodes = typeof workflow.nodes === 'string' ? JSON.parse(workflow.nodes) : workflow.nodes;
     const edges = typeof workflow.edges === 'string' ? JSON.parse(workflow.edges) : workflow.edges;
 
     let nodesToExecute = nodes;
     let edgesToExecute = edges;
 
+    // Filter nodes if partial running is selected
     if (scope === 'PARTIAL' && nodeId) {
       nodesToExecute = nodes.filter((n: any) => n.id === nodeId);
       edgesToExecute = edges;
     }
 
-    // Create the database Run record with RUNNING status
+    // 3. Create the database Run record with RUNNING status
     const run = await prisma.run.create({
       data: {
         workflowId,
@@ -565,7 +630,7 @@ export async function POST(req: Request) {
       },
     });
 
-    // Initialize all participating NodeExecution records to PENDING status
+    // 4. Initialize all participating NodeExecution records to PENDING status
     await prisma.nodeExecution.createMany({
       data: nodesToExecute.map((node: any) => ({
         runId: run.id,
@@ -578,7 +643,7 @@ export async function POST(req: Request) {
       })),
     });
 
-    // Trigger background execution loop asynchronously
+    // 5. Trigger the orchestrator loop asynchronously and return immediately to prevent timeout
     executeWorkflowBackground(run.id, nodesToExecute, edgesToExecute).catch((err) => {
       console.error(`Background workflow run executor crashed:`, err);
     });

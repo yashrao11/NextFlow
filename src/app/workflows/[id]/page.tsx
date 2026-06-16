@@ -16,6 +16,11 @@ interface RunHistoryItem {
   scope: string;
 }
 
+/**
+ * WorkflowBuilderPage
+ * Main workspace React page for designing and executing visual canvas workflows.
+ * Orchestrates React Flow canvas synchronization, state serialization, run history, and undo/redo stacks.
+ */
 export default function WorkflowBuilderPage() {
   const params = useParams();
   const router = useRouter();
@@ -43,6 +48,10 @@ export default function WorkflowBuilderPage() {
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
 
   // --- INITIALIZE & LOAD CANVAS DATA ---
+  /**
+   * Loads target workflow layout (nodes and edges lists) from NextJS API routes on mount.
+   * If parameter equals 'new', initializes default Request Inputs and Response cards.
+   */
   useEffect(() => {
     async function loadWorkflow() {
       setIsLoading(true);
@@ -208,6 +217,14 @@ export default function WorkflowBuilderPage() {
   };
 
   // --- RUN WORKFLOW WITH ACTUAL TRIGGER.DEV POLLING ---
+  /**
+   * Orchestrates the execution of the workflow.
+   * 1. Saves current canvas node/edge configuration to postgres.
+   * 2. Calls POST /api/workflows/run, creating database tracking records.
+   * 3. Loops setTimeout polling requests checking run progress.
+   * 4. Updates individual React Flow node states on status transition (PENDING -> RUNNING -> SUCCESS/FAILED).
+   * 5. Animates active running edges connection paths.
+   */
   const handleRunWorkflow = async (targetNodeId?: string) => {
     if (isExecuting) return;
     setIsExecuting(true);
@@ -420,6 +437,10 @@ export default function WorkflowBuilderPage() {
   };
 
   // --- RESET WORKFLOW OUTPUTS & INPUTS ---
+  /**
+   * Resets all canvas nodes to their baseline settings, deleting execution times and logs.
+   * Saves updated state to Database immediately to prevent local/remote conflicts.
+   */
   const handleResetWorkflow = async () => {
     if (isExecuting || isSaving) return;
 

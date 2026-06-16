@@ -20,6 +20,15 @@ import {
 import NodePicker from './NodePicker';
 
 // --- CUSTOM EDGE PATH COMPONENT ---
+/**
+ * Renders custom bezier link lines between node handles.
+ * Generates custom stroke colors and animations depending on handle type:
+ * - Blue: Image data handle connections.
+ * - Orange: Text or Prompt data handle connections.
+ * - Purple: Default connections.
+ * 
+ * Animates flow markers when `data.isRunning` is active.
+ */
 function CustomEdge({
   id,
   sourceX,
@@ -33,6 +42,7 @@ function CustomEdge({
   data,
   sourceHandleId,
 }: EdgeProps) {
+  // 1. Calculate bezier curve path parameters
   const [edgePath] = getBezierPath({
     sourceX,
     sourceY,
@@ -71,7 +81,7 @@ function CustomEdge({
   );
 }
 
-// Custom Node Mappings
+// Custom React Flow node components mapping
 const nodeTypes = {
   requestInputs: RequestInputsNode,
   cropImage: CropImageNode,
@@ -79,11 +89,16 @@ const nodeTypes = {
   response: ResponseNode,
 };
 
-// Custom Edge Mappings
+// Custom React Flow edge links mapping
 const edgeTypes = {
   custom: CustomEdge,
 };
 
+/**
+ * WorkflowCanvas Component
+ * Renders the primary React Flow sandbox layout with background, minimap,
+ * toolbar controls, and floating error/success toast elements.
+ */
 export default function WorkflowCanvas() {
   const nodes = useWorkflowStore((state) => state.nodes);
   const edges = useWorkflowStore((state) => state.edges);
@@ -93,7 +108,6 @@ export default function WorkflowCanvas() {
   const isConnectionValid = useWorkflowStore((state) => state.isConnectionValid);
   const notification = useWorkflowStore((state) => state.notification);
   const clearNotification = useWorkflowStore((state) => state.clearNotification);
-
   const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
 
   // Map onRunNode callback dynamically to avoid storing callbacks in the database
@@ -105,6 +119,7 @@ export default function WorkflowCanvas() {
           data: {
             ...node.data,
             onRunNode: (nodeId: string) => {
+              // Fire standard CustomEvent to be processed by index page listener
               window.dispatchEvent(new CustomEvent('run-node', { detail: { nodeId } }));
             },
           },
@@ -122,7 +137,7 @@ export default function WorkflowCanvas() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
-        onNodeDragStart={saveStateToHistory}
+        onNodeDragStart={saveStateToHistory} // Track visual modifications in history stack
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         isValidConnection={isConnectionValid}
@@ -131,13 +146,17 @@ export default function WorkflowCanvas() {
         maxZoom={2}
         className="text-zinc-800"
       >
+        {/* Dotted grid background layout matching Galaxy.ai reference */}
         <Background
           variant={BackgroundVariant.Dots}
           gap={16}
           size={1}
-          color="#e4e4e7" // Light-grey dots matching reference
+          color="#e4e4e7"
         />
+        {/* Navigation control zoom buttons */}
         <Controls className="!bg-white border border-zinc-200 rounded-lg shadow-md" />
+        
+        {/* Floating MiniMap layout preview panel */}
         <MiniMap
           nodeStrokeColor={(n) => {
             if (n.type === 'requestInputs') return '#a78bfa';
@@ -159,10 +178,10 @@ export default function WorkflowCanvas() {
         />
       </ReactFlow>
 
-      {/* Floating searchable node picker */}
+      {/* Floating searchable node picker bottom widget */}
       <NodePicker />
 
-      {/* Premium Connection Toast Alert */}
+      {/* Toast Alert panel triggered by canvas validation hooks */}
       {notification && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2 px-4 py-3 rounded-xl border bg-zinc-900/95 backdrop-blur-md text-white border-zinc-800 shadow-2xl animate-toast-in pointer-events-auto max-w-lg">
           {notification.type === 'error' && (
@@ -188,3 +207,4 @@ export default function WorkflowCanvas() {
     </div>
   );
 }
+

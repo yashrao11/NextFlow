@@ -11,6 +11,7 @@ import {
   Clock,
 } from 'lucide-react';
 
+/** Defines the options schema for selectable node templates in the picker menu. */
 interface NodeOption {
   type: string;
   name: string;
@@ -19,13 +20,19 @@ interface NodeOption {
   icon: React.ReactNode;
 }
 
+/**
+ * NodePicker Component
+ * Renders a floating search bar that allows users to pick, drag, and create
+ * new nodes onto the React Flow canvas workspace.
+ */
 export default function NodePicker() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const { getViewport } = useReactFlow();
+  const [isOpen, setIsOpen] = useState(false); // Controls search results overlay visibility
+  const [search, setSearch] = useState(''); // Holds current search query string
+  const { getViewport } = useReactFlow(); // Pulls viewport zoom/translation to calculate position coordinates
   const addNode = useWorkflowStore((state) => state.addNode);
   const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
 
+  // Hardcoded list of available workflow node templates
   const nodeOptions: NodeOption[] = useMemo(() => [
     {
       type: 'cropImage',
@@ -57,6 +64,7 @@ export default function NodePicker() {
     },
   ], []);
 
+  // Filter options based on user text query
   const filteredOptions = useMemo(() => {
     return nodeOptions.filter(
       (opt) =>
@@ -73,9 +81,14 @@ export default function NodePicker() {
     'Others',
   ];
 
+  /**
+   * Spawns a new node onto the center of the canvas viewport.
+   * Resolves flow coordinates dynamically based on the current translation offsets (x, y) and zoom factor.
+   */
   const handleSpawnNode = (type: string) => {
-    saveStateToHistory();
+    saveStateToHistory(); // Backup state in history for undo/redo
 
+    // 1. Calculate the center of the viewport in flow units
     const { x, y, zoom } = getViewport();
     const flowX = (-x + window.innerWidth / 2) / zoom;
     const flowY = (-y + window.innerHeight / 2) / zoom;
@@ -83,6 +96,7 @@ export default function NodePicker() {
     const cleanType = type.replace('Recent: ', '');
     const id = `${cleanType}-${Date.now()}`;
 
+    // 2. Build default node blueprint structure
     let newNode: any = {
       id,
       type: cleanType,
@@ -92,6 +106,7 @@ export default function NodePicker() {
       },
     };
 
+    // 3. Setup default parameters based on Clean type
     if (cleanType === 'cropImage') {
       newNode.data.crop = { x: 0, y: 0, width: 100, height: 100 };
     } else if (cleanType === 'gemini') {
@@ -110,7 +125,7 @@ export default function NodePicker() {
 
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
-      {/* Searchable overlay */}
+      {/* Search results overlay menu */}
       {isOpen && (
         <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-white border border-zinc-200 rounded-xl p-4 w-96 shadow-xl flex flex-col gap-4 max-h-[380px] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-200 text-zinc-900">
           <div className="flex items-center gap-2 border-b border-zinc-100 pb-2">
@@ -165,7 +180,7 @@ export default function NodePicker() {
         </div>
       )}
 
-      {/* Main bar */}
+      {/* Floating Bottom Search Bar Wrapper */}
       <div className="bg-white/90 backdrop-blur-md border border-zinc-200 rounded-full px-4 py-2 shadow-xl flex items-center justify-between gap-3 w-80">
         <div className="flex items-center gap-2 flex-1">
           <Search className="w-4.5 h-4.5 text-zinc-400" />
@@ -193,3 +208,4 @@ export default function NodePicker() {
     </div>
   );
 }
+

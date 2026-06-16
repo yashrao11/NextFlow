@@ -11,17 +11,23 @@ import {
   applyEdgeChanges,
 } from 'reactflow';
 
+/**
+ * Represents a snapshot of the canvas layout for undo/redo state tracking.
+ */
 interface CanvasState {
   nodes: Node[];
   edges: Edge[];
 }
 
+/**
+ * Main Zustand store type definition for managing global workflow canvas state.
+ */
 interface WorkflowState {
   nodes: Node[];
   edges: Edge[];
-  undoStack: CanvasState[];
-  redoStack: CanvasState[];
-  notification: { message: string; type: 'error' | 'success' | 'warning' } | null;
+  undoStack: CanvasState[]; // Holds historical snapshots for the 'undo' operation
+  redoStack: CanvasState[]; // Holds historical snapshots for the 'redo' operation
+  notification: { message: string; type: 'error' | 'success' | 'warning' } | null; // Toast alert state
   setNodes: (nodes: Node[]) => void;
   setEdges: (edges: Edge[]) => void;
   addNode: (node: Node) => void;
@@ -44,20 +50,24 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   redoStack: [],
   notification: null,
 
+  /** Sets the current nodes array state. */
   setNodes: (nodes) => {
     set({ nodes });
   },
 
+  /** Sets the current edges array state. */
   setEdges: (edges) => {
     set({ edges });
   },
 
+  /** Adds a new node to the workspace. */
   addNode: (node) => {
     set((state) => ({
       nodes: [...state.nodes, node],
     }));
   },
 
+  /** Updates the local data object parameter of a specific node by ID. */
   updateNodeData: (nodeId, data) => {
     set((state) => ({
       nodes: state.nodes.map((node) => {
@@ -75,35 +85,39 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }));
   },
 
+  /** Callback invoked by React Flow when a node is dragged, scaled, or removed. */
   onNodesChange: (changes) => {
     const hasRemove = changes.some((c) => c.type === 'remove');
     if (hasRemove) {
-      get().saveStateToHistory();
+      get().saveStateToHistory(); // Backup current layout before node deletion
     }
     set({
       nodes: applyNodeChanges(changes, get().nodes),
     });
   },
 
+  /** Callback invoked by React Flow when an edge relationship is updated or removed. */
   onEdgesChange: (changes) => {
     const hasRemove = changes.some((c) => c.type === 'remove');
     if (hasRemove) {
-      get().saveStateToHistory();
+      get().saveStateToHistory(); // Backup current layout before edge deletion
     }
     set({
       edges: applyEdgeChanges(changes, get().edges),
     });
   },
 
+  /** Pushes the current canvas node/edge configuration to the undo stack. */
   saveStateToHistory: () => {
     const { nodes, edges, undoStack } = get();
     const currentState: CanvasState = JSON.parse(JSON.stringify({ nodes, edges }));
     set({
       undoStack: [...undoStack, currentState],
-      redoStack: [],
+      redoStack: [], // Clear redo history whenever a fresh action occurs
     });
   },
 
+  /** Restores the previous canvas configuration from the undo stack. */
   undo: () => {
     const { undoStack, redoStack, nodes, edges } = get();
     if (undoStack.length === 0) return;
@@ -120,6 +134,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     });
   },
 
+  /** Restores a configuration from the redo stack. */
   redo: () => {
     const { undoStack, redoStack, nodes, edges } = get();
     if (redoStack.length === 0) return;
@@ -136,23 +151,29 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     });
   },
 
+  /** Validates basic local edge configurations. */
   isConnectionValid: (connection: Connection) => {
     const { source, target } = connection;
     if (!source || !target) return false;
-    if (source === target) return false;
+    if (source === target) return false; // Block connecting a node directly to itself
     return true;
   },
 
+  /**
+   * Action invoked when the user connects handles between two canvas nodes.
+   * Handles node type checking, circular graph loops (DAG check), and duplicate checks.
+   */
   onConnect: (connection) => {
     const { source, target, sourceHandle, targetHandle } = connection;
     if (!source || !target) return;
 
+    // Reject self-connections
     if (source === target) {
       get().showNotification('Not allowed: Cannot connect a node to itself.', 'error');
       return;
     }
 
-    // Helper to resolve user-friendly node names
+    /** Helper to resolve human-readable node names for alerts. */
     const getNodeLabel = (nodeId: string) => {
       const node = get().nodes.find((n) => n.id === nodeId);
       if (!node) return nodeId;
@@ -163,7 +184,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       return node.data?.label || node.type || nodeId;
     };
 
-    // Helper to resolve user-friendly handle names
+    /** Helper to translate handle IDs into descriptive labels. */
     const getHandleLabel = (handleId: string) => {
       const h = handleId.toLowerCase();
       if (h.includes('prompt')) return 'Prompt (Text)';
@@ -177,7 +198,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       return handleId;
     };
 
-    // Check duplicate connections
+    // Ensure connection doesn't duplicate an existing edge
     const edges = get().edges;
     const exists = edges.some(
       (e) =>
@@ -190,7 +211,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       return;
     }
 
-    // DAG Check (Cycle Detection using Depth-First Search)
+    // --- DIRECTED ACYCLIC GRAPH (DAG) CYCLE DETECTION ---
+    // Uses DFS to check if drawing the connection from target to source is possible
     const adj: Record<string, string[]> = {};
     edges.forEach((edge) => {
       if (!adj[edge.source]) {
@@ -222,11 +244,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       return;
     }
 
-    // Type-Safe Validation:
+    // --- TYPE COMPATIBILITY VALIDATION ---
     const sHandle = sourceHandle?.toLowerCase() || '';
     const tHandle = targetHandle?.toLowerCase() || '';
 
-    // Determine source type
+    // Determine output data type of source handle
     let sourceType = 'text';
     if (sHandle.includes('image')) {
       sourceType = 'image';
@@ -234,7 +256,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       sourceType = 'text';
     }
 
-    // Determine target expected type
+    // Determine expected target parameter input type
     let targetType = 'any';
     if (tHandle.includes('image')) {
       targetType = 'image';
@@ -250,7 +272,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       targetType = 'any';
     }
 
-    // Validate type compatibility
+    // Validate type compatibility matches between output -> input handles
     if (targetType !== 'any') {
       if (targetType === 'image' && sourceType !== 'image') {
         const sourceName = getNodeLabel(source);
@@ -282,11 +304,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
 
     get().saveStateToHistory();
+    // Add the new connection edge styled with our custom flow properties
     set({
       edges: addEdge({ ...connection, type: 'custom', data: { isRunning: false } }, get().edges),
     });
   },
 
+  /** Renders a popup notification toast. Auto-dismisses after 4 seconds. */
   showNotification: (message, type = 'error') => {
     set({ notification: { message, type } });
     if ((globalThis as any).__notificationTimeout) {
@@ -297,6 +321,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }, 4000);
   },
 
+  /** Clears active notification. */
   clearNotification: () => {
     if ((globalThis as any).__notificationTimeout) {
       clearTimeout((globalThis as any).__notificationTimeout);
@@ -304,3 +329,4 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     set({ notification: null });
   },
 }));
+

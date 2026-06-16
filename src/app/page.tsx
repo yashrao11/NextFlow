@@ -16,9 +16,9 @@ import {
   Search,
   Sparkles,
   AlertCircle,
-  HelpCircle,
 } from 'lucide-react';
 
+/** Model schema representing a workflow execution run. */
 interface Run {
   id: string;
   status: string;
@@ -27,37 +27,46 @@ interface Run {
   timestamp: string;
 }
 
+/** Model schema representing a single workflow canvas item. */
 interface Workflow {
   id: string;
   name: string;
   userId: string;
-  nodes: string;
-  edges: string;
+  nodes: string; // JSON string in DB
+  edges: string; // JSON string in DB
   createdAt: string;
   lastEdited: string;
   runs?: Run[];
 }
 
+/**
+ * WorkflowsDashboard Component
+ * Renders the home screen dashboard showing all workflows owned by the logged-in Clerk user.
+ * Facilitates workflow renaming, creation of blank templates, deletion, search filtering, and state polling.
+ */
 export default function WorkflowsDashboard() {
   const router = useRouter();
-  const [workflows, setWorkflows] = useState<Workflow[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]); // User workflows list state
+  const [searchQuery, setSearchQuery] = useState(''); // Text state for search input
+  const [isLoading, setIsLoading] = useState(true); // Loading indicator state
+  const [error, setError] = useState<string | null>(null); // Error reporting state
   
-  // Creation state
+  // Creation loading state
   const [isCreating, setIsCreating] = useState(false);
 
-  // Renaming states
+  // Renaming targeting states
   const [editingId, setEditingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
 
-  // Deletion states
+  // Deletion modal targeting states
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Fetch workflows on mount
+  /**
+   * Fetches the user's workflows from the backend API.
+   * Handles error formatting if retrieval fails.
+   */
   const fetchWorkflows = async () => {
     setIsLoading(true);
     setError(null);
@@ -80,7 +89,9 @@ export default function WorkflowsDashboard() {
     fetchWorkflows();
   }, []);
 
-  // Format date helper
+  /**
+   * Formats database date strings to relative human time values (e.g. 'Edited 1m ago').
+   */
   const formatRelativeTime = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -99,7 +110,9 @@ export default function WorkflowsDashboard() {
     return `Edited ${diffDays}d ago`;
   };
 
-  // Create new blank flow
+  /**
+   * Calls API to provision a fresh, blank workflow card and redirects user to its builder canvas.
+   */
   const handleCreateWorkflow = async () => {
     if (isCreating) return;
     setIsCreating(true);
@@ -123,12 +136,13 @@ export default function WorkflowsDashboard() {
     }
   };
 
-  // Rename workflow
+  /** Initiates inline rename form. */
   const handleStartRename = (wf: Workflow) => {
     setEditingId(wf.id);
     setRenameValue(wf.name);
   };
 
+  /** Saves the updated name to PostgreSQL using PUT API. */
   const handleSaveRename = async (id: string) => {
     if (!renameValue.trim() || isRenaming) return;
     setIsRenaming(true);
@@ -156,7 +170,7 @@ export default function WorkflowsDashboard() {
     }
   };
 
-  // Delete workflow
+  /** Deletes the workflow from PostgreSQL using DELETE API. */
   const handleDeleteWorkflow = async (id: string) => {
     if (isDeleting) return;
     setIsDeleting(true);
@@ -169,7 +183,7 @@ export default function WorkflowsDashboard() {
         throw new Error('Failed to delete workflow');
       }
 
-      // Smooth removal animation trigger state updates
+      // Smooth state removal
       setWorkflows((prev) => prev.filter((wf) => wf.id !== id));
       setDeleteConfirmId(null);
     } catch (err) {
@@ -180,7 +194,7 @@ export default function WorkflowsDashboard() {
     }
   };
 
-  // Filter workflows based on search
+  // Filter list by searchQuery
   const filteredWorkflows = workflows.filter((wf) =>
     wf.name.toLowerCase().includes(searchQuery.toLowerCase())
   );

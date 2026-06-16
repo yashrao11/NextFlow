@@ -3,19 +3,28 @@ import { auth } from '@clerk/nextjs/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 
+// Force dynamic execution for API routes
 export const dynamic = 'force-dynamic';
 
+// Validation schema for updating a workflow
 const updateWorkflowSchema = z.object({
   name: z.string().min(1, 'Workflow name cannot be empty').optional(),
   nodes: z.array(z.any()).optional(),
   edges: z.array(z.any()).optional(),
 });
 
+/**
+ * GET /api/workflows/[id]
+ * Fetches a single workflow by its ID along with its historical runs.
+ * If the workflow is a seeded system template and the user does not own it,
+ * it automatically clones the template under the user's account.
+ */
 export async function GET(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
+    // 1. Authenticate user
     const { userId } = auth();
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -23,6 +32,7 @@ export async function GET(
 
     const { id } = params;
 
+    // 2. Fetch the workflow from database
     const workflow = await prisma.workflow.findUnique({
       where: { id },
       include: {
@@ -39,8 +49,10 @@ export async function GET(
       return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
     }
 
+    // 3. Authorization check
     if (workflow.userId !== userId) {
-      // If it's a seed workflow, clone it for this user!
+      // Auto-cloning for seed system templates:
+      // If the template belongs to 'seed-user-id', clone it for this user
       if (workflow.userId === 'seed-user-id') {
         const existingClone = await prisma.workflow.findFirst({
           where: {
@@ -61,6 +73,7 @@ export async function GET(
           return NextResponse.json(existingClone);
         }
 
+        // Create the clone record
         const clonedWorkflow = await prisma.workflow.create({
           data: {
             name: workflow.name,
@@ -82,11 +95,16 @@ export async function GET(
   }
 }
 
+/**
+ * PUT /api/workflows/[id]
+ * Updates workflow configuration (name, nodes layout, edges connection list).
+ */
 export async function PUT(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
+    // 1. Authenticate user
     const { userId } = auth();
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -94,6 +112,7 @@ export async function PUT(
 
     const { id } = params;
 
+    // 2. Fetch target workflow
     const workflow = await prisma.workflow.findUnique({
       where: { id },
     });
@@ -102,10 +121,12 @@ export async function PUT(
       return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
     }
 
+    // 3. Verify ownership
     if (workflow.userId !== userId) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // 4. Validate schema
     const body = await req.json();
     const parsed = updateWorkflowSchema.safeParse(body);
     if (!parsed.success) {
@@ -115,6 +136,7 @@ export async function PUT(
       );
     }
 
+    // 5. Update data inside Database
     const updatedWorkflow = await prisma.workflow.update({
       where: { id },
       data: {
@@ -131,11 +153,16 @@ export async function PUT(
   }
 }
 
+/**
+ * DELETE /api/workflows/[id]
+ * Deletes the specified workflow from PostgreSQL.
+ */
 export async function DELETE(
   req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
+    // 1. Authenticate user
     const { userId } = auth();
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -143,6 +170,7 @@ export async function DELETE(
 
     const { id } = params;
 
+    // 2. Fetch target workflow
     const workflow = await prisma.workflow.findUnique({
       where: { id },
     });
@@ -151,10 +179,12 @@ export async function DELETE(
       return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
     }
 
+    // 3. Verify ownership
     if (workflow.userId !== userId) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // 4. Delete from Database
     await prisma.workflow.delete({
       where: { id },
     });
@@ -165,3 +195,4 @@ export async function DELETE(
     return NextResponse.json({ error: 'Internal Server Error', message: error.message }, { status: 500 });
   }
 }
+

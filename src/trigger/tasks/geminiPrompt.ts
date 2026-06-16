@@ -1,6 +1,10 @@
 import { task } from "@trigger.dev/sdk/v3";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+/**
+ * Trigger.dev task for running Gemini model prompt instructions.
+ * Orchestrates calls to Google's Generative AI API with fallback support.
+ */
 export const geminiPromptTask = task({
   id: "gemini-prompt",
   run: async (payload: {
@@ -16,7 +20,7 @@ export const geminiPromptTask = task({
     console.log("[DEBUG] Starting live Gemini prompt execution using active model candidates.");
     const genAI = new GoogleGenerativeAI(apiKey);
 
-    // ACTIVE GOOGLE AI STUDIO 2026 MODELS
+    // ACTIVE GOOGLE AI STUDIO 2026 MODELS (Fallback Candidates List)
     const modelCandidates = [
       "gemini-3.5-flash",
       "gemini-2.5-flash",
@@ -28,15 +32,19 @@ export const geminiPromptTask = task({
     let lastError: any = null;
     let responseText = "";
 
+    // 1. Fallback Loop: Sequential execution over candidate models.
     for (const modelName of modelCandidates) {
       try {
         console.log(`[DEBUG] Attempting live API execution with Google model: ${modelName}`);
         const model = genAI.getGenerativeModel({ model: modelName });
 
+        // Initialize request contents array with the text prompt
         let contents: any[] = [payload.prompt];
 
+        // 2. Assemble connected Images (if any)
         if (payload.images && payload.images.length > 0) {
           for (const imgUrl of payload.images) {
+            // Process base64 formatted data URLs
             if (imgUrl.startsWith('data:image/')) {
               let cleanBase64 = imgUrl;
               if (cleanBase64.includes(',')) {
@@ -49,6 +57,7 @@ export const geminiPromptTask = task({
                 }
               });
             } else {
+              // Fetch remote image resources and convert to base64 inlineData
               const response = await fetch(imgUrl);
               const buffer = await response.arrayBuffer();
               contents.push({
@@ -61,6 +70,7 @@ export const geminiPromptTask = task({
           }
         }
 
+        // 3. Assemble connected Videos (if any)
         if (payload.video && payload.video.data) {
           let cleanBase64 = payload.video.data;
           if (cleanBase64.includes(',')) {
@@ -74,6 +84,7 @@ export const geminiPromptTask = task({
           });
         }
 
+        // 4. Assemble connected Audio (if any)
         if (payload.audio && payload.audio.data) {
           let cleanBase64 = payload.audio.data;
           if (cleanBase64.includes(',')) {
@@ -87,6 +98,7 @@ export const geminiPromptTask = task({
           });
         }
 
+        // 5. Assemble other files/documents like PDFs (if any)
         if (payload.file && payload.file.data) {
           let cleanBase64 = payload.file.data;
           if (cleanBase64.includes(',')) {
@@ -100,6 +112,7 @@ export const geminiPromptTask = task({
           });
         }
 
+        // 6. Invoke Google's API to generate content with system prompt instructions
         const result = await model.generateContent({
           contents,
           systemInstruction: payload.systemPrompt
@@ -114,10 +127,12 @@ export const geminiPromptTask = task({
       }
     }
 
+    // Throw the final API error if all candidates failed to execute
     if (!responseText && lastError) {
-      throw lastError; // Throw the actual Google API error if all candidates fail
+      throw lastError; 
     }
 
     return { response: responseText };
   },
 });
+

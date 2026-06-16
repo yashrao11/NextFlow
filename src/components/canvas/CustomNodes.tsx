@@ -31,6 +31,13 @@ import {
 
 const handleClass = "!w-3 !h-3 !bg-purple-500 !border-2 !border-white hover:scale-125 transition-transform shadow";
 
+/**
+ * Renders custom CSS Tailwind classes for React Flow source/target handle circles.
+ * Maps clean string names to specific background colors.
+ *
+ * @param colorType Color name (orange, teal, green, blue, purple, pink).
+ * @returns Fully compiled class name string.
+ */
 const getHandleClass = (colorType: 'orange' | 'teal' | 'green' | 'blue' | 'purple' | 'pink') => {
   const colorMap = {
     orange: '!bg-amber-500',
@@ -43,7 +50,11 @@ const getHandleClass = (colorType: 'orange' | 'teal' | 'green' | 'blue' | 'purpl
   return `!w-3 !h-3 ${colorMap[colorType]} !border-2 !border-white hover:scale-125 transition-transform shadow`;
 };
 
-// --- INLINE MARKDOWN RENDERER ---
+/**
+ * --- INLINE MARKDOWN RENDERER ---
+ * Simple, custom inline parser that splits content by newlines and bold markers (**).
+ * Renders text blocks safely inside standard React paragraph layout tags.
+ */
 function MarkdownRenderer({ content }: { content: string }) {
   if (!content) return null;
   const paragraphs = content.split('\n');
@@ -72,6 +83,12 @@ function MarkdownRenderer({ content }: { content: string }) {
 }
 
 // --- 1. REQUEST INPUTS NODE ---
+/**
+ * RequestInputsNode
+ * React Flow custom node representing workflow inputs.
+ * Allows creation, duplication, re-ordering, and removal of variables (text or image).
+ * Images uploaded are scaled down via HTML5 canvas to prevent huge base64 payload overhead.
+ */
 export function RequestInputsNode({ id, data }: NodeProps) {
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
@@ -383,6 +400,12 @@ export function RequestInputsNode({ id, data }: NodeProps) {
 }
 
 // --- 2. CROP IMAGE NODE ---
+/**
+ * CropImageNode
+ * Custom node representing image cropping operations.
+ * Resolves source image URLs from upstream connected parent nodes.
+ * Renders a visual preview with dragging crop boundaries and slider control ranges.
+ */
 export function CropImageNode({ id, data }: NodeProps) {
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const edges = useWorkflowStore((state) => state.edges);
@@ -667,6 +690,12 @@ export function CropImageNode({ id, data }: NodeProps) {
 }
 
 // --- 3. GEMINI NODE ---
+/**
+ * GeminiNode
+ * Custom node representing inference execution using Gemini API.
+ * Configures model models parameters (temperature, maxTokens).
+ * Collects input sources dynamically (text flow prompt, system prompt, attached images/audio/video/PDFs).
+ */
 export function GeminiNode({ id, data }: NodeProps) {
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const edges = useWorkflowStore((state) => state.edges);
@@ -1263,6 +1292,11 @@ export function GeminiNode({ id, data }: NodeProps) {
 }
 
 // --- 4. RESPONSE NODE ---
+/**
+ * ResponseNode
+ * Terminal node of the workflow canvas.
+ * Renders final results (markdown strings or cropped images) resolved from upstream parent nodes.
+ */
 export function ResponseNode({ id, data }: NodeProps) {
   const result = data.output?.result || data.result || '';
   const edges = useWorkflowStore((state) => state.edges);

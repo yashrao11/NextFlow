@@ -642,7 +642,12 @@ export function CropImageNode({ id, data }: NodeProps) {
           </div>
           <div className="w-full min-h-[48px] bg-zinc-50 border border-zinc-200 border-dashed rounded-lg p-2.5 flex items-center justify-center overflow-hidden nodrag nowheel select-none">
             {data.output?.imageUrl ? (
-              <img src={data.output.imageUrl} alt="Cropped Output Preview" className="max-w-full h-auto object-contain rounded" />
+              <img
+                src={data.output.imageUrl}
+                alt="Cropped Output Preview"
+                style={{ width: `${crop.width}%` }}
+                className="max-w-full h-auto object-contain rounded"
+              />
             ) : (
               <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
             )}
@@ -707,24 +712,29 @@ export function GeminiNode({ id, data }: NodeProps) {
     window.dispatchEvent(event);
   };
 
-  const getConnectedImages = (): string[] => {
+  const getConnectedImages = () => {
     const incomingEdges = edges.filter(
       (e) => e.target === id && e.targetHandle === 'image-input'
     );
-    const images: string[] = [];
+    const images: { url: string; cropWidth?: number }[] = [];
     incomingEdges.forEach((edge) => {
       const parentNode = nodes.find((n) => n.id === edge.source);
       if (!parentNode) return;
       
       if (parentNode.type === 'cropImage') {
         const img = parentNode.data.output?.imageUrl || parentNode.data.imageUrl;
-        if (img) images.push(img);
+        if (img) {
+          images.push({
+            url: img,
+            cropWidth: parentNode.data.crop?.width,
+          });
+        }
       } else if (parentNode.type === 'requestInputs') {
         const fields = parentNode.data.fields || [];
         const fieldId = edge.sourceHandle?.split('-')[0] || '';
         const imgField = fields.find((f: any) => f.id.startsWith(fieldId) && f.type === 'image');
         if (imgField?.value) {
-          images.push(imgField.value);
+          images.push({ url: imgField.value });
         }
       }
     });
@@ -913,12 +923,15 @@ export function GeminiNode({ id, data }: NodeProps) {
 
             {isImageConnected ? (
               <div className="flex flex-col items-center gap-2.5 mt-1 select-none nodrag w-full">
-                {getConnectedImages().map((imgUrl, idx) => (
+                {getConnectedImages().map((imgObj, idx) => (
                   <img
                     key={idx}
-                    src={imgUrl}
+                    src={imgObj.url}
                     alt={`Cropped input ${idx + 1}`}
-                    className="max-w-full max-h-48 object-scale-down rounded-lg border border-zinc-200 bg-zinc-50 nodrag"
+                    style={{
+                      width: imgObj.cropWidth ? `${imgObj.cropWidth}%` : undefined,
+                    }}
+                    className="max-w-full max-h-48 object-contain rounded-lg border border-zinc-200 bg-zinc-50 nodrag"
                   />
                 ))}
                 {getConnectedImages().length === 0 && (
@@ -1252,10 +1265,24 @@ export function GeminiNode({ id, data }: NodeProps) {
 // --- 4. RESPONSE NODE ---
 export function ResponseNode({ id, data }: NodeProps) {
   const result = data.output?.result || data.result || '';
+  const edges = useWorkflowStore((state) => state.edges);
+  const nodes = useWorkflowStore((state) => state.nodes);
 
   const isBase64Image = (str: string) => {
     return typeof str === 'string' && (str.startsWith('data:image/') || str.startsWith('http://') || str.startsWith('https://'));
   };
+
+  const getCropWidth = (): number | undefined => {
+    const incomingEdge = edges.find((e) => e.target === id && e.targetHandle === 'result-input');
+    if (!incomingEdge) return undefined;
+    const parentNode = nodes.find((n) => n.id === incomingEdge.source);
+    if (parentNode?.type === 'cropImage') {
+      return parentNode.data.crop?.width;
+    }
+    return undefined;
+  };
+
+  const cropWidth = getCropWidth();
 
   return (
     <div
@@ -1287,7 +1314,14 @@ export function ResponseNode({ id, data }: NodeProps) {
           <div className="w-full min-h-[100px] max-h-56 bg-zinc-50 border border-zinc-200 rounded-lg p-3 overflow-y-auto text-xs text-zinc-800 font-mono leading-relaxed nodrag nowheel">
             {isBase64Image(result) ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={result} alt="Response Output Preview" className="max-w-full h-auto object-scale-down rounded-md animate-fade-in nodrag mx-auto" />
+              <img
+                src={result}
+                alt="Response Output Preview"
+                style={{
+                  width: cropWidth ? `${cropWidth}%` : undefined,
+                }}
+                className="max-w-full h-auto object-contain rounded-md animate-fade-in nodrag mx-auto"
+              />
             ) : (
               <span>{result}</span>
             )}

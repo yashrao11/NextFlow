@@ -117,13 +117,14 @@ async function pollTriggerRun(
   triggerRunId: string, 
   dbRunId: string, 
   fallbackTask: () => Promise<any>
-): Promise<any> {
+): Promise<{ output: any; durationInSeconds?: number }> {
   const apiKey = process.env.TRIGGER_API_KEY;
 
   // If Trigger.dev credentials are missing or unconfigured, execute task locally as fallback
   if (!apiKey || apiKey.startsWith('tr_dev_dummy')) {
     console.warn('[Run Poller] Trigger.dev API key missing, executing task locally as fallback.');
-    return await fallbackTask();
+    const result = await fallbackTask();
+    return { output: result };
   }
 
   // Increased attempts to allow for mandatory 30-second delay tasks
@@ -151,7 +152,8 @@ async function pollTriggerRun(
 
       if (run) {
         if (run.status === 'COMPLETED') {
-          return run.output;
+          const durationInSeconds = run.durationMs ? run.durationMs / 1000 : undefined;
+          return { output: run.output, durationInSeconds };
         } else if (
           run.status === 'FAILED' ||
           run.status === 'CANCELED' ||
@@ -171,7 +173,8 @@ async function pollTriggerRun(
   }
 
   console.warn('[Run Poller] Trigger.dev task timed out, falling back to local computation.');
-  return await fallbackTask();
+  const result = await fallbackTask();
+  return { output: result };
 }
 
 /**
@@ -622,6 +625,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
 
         (async () => {
           const nodeStartTime = Date.now();
+          let durationInSeconds: number | undefined;
           try {
             // Mark node status as RUNNING in DB
             await prisma.nodeExecution.update({
@@ -666,9 +670,11 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
               const triggerRun = await tasks.trigger('crop-image', cropPayload);
 
               // Poll status or fall back to local execution
-              output = await pollTriggerRun(triggerRun.id, runId, () =>
+              const pollResult = await pollTriggerRun(triggerRun.id, runId, () =>
                 localCropFallback(imageUrl, crop.x, crop.y, crop.width, crop.height)
               );
+              output = pollResult.output;
+              durationInSeconds = pollResult.durationInSeconds;
             } else if (node.type === 'gemini') {
               const prompt = resolvedInputs.prompt || node.data?.prompt || '';
               const systemPrompt = resolvedInputs.systemPrompt || node.data?.systemPrompt || '';
@@ -728,7 +734,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
               const triggerRun = await tasks.trigger('gemini-prompt', triggerPayload);
 
               // Poll status or fall back to local execution
-              output = await pollTriggerRun(triggerRun.id, runId, () =>
+              const pollResult = await pollTriggerRun(triggerRun.id, runId, () =>
                 localGeminiFallback(
                   prompt,
                   systemPrompt,
@@ -739,9 +745,11 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                   file ? (typeof file === 'string' ? { data: file, type: 'application/pdf' } : { data: file.data, type: file.type }) : undefined
                 )
               );
+              output = pollResult.output;
+              durationInSeconds = pollResult.durationInSeconds;
             }
 
-            const duration = (Date.now() - nodeStartTime) / 1000;
+            const duration = durationInSeconds ?? ((Date.now() - nodeStartTime) / 1000);
             // Node execution succeeded, update output state in DB
             await prisma.nodeExecution.update({
               where: { id: ex.id },

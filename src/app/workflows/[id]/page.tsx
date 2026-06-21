@@ -1,5 +1,11 @@
 'use client';
 
+declare global {
+  interface Window {
+    activePollInterval?: NodeJS.Timeout;
+  }
+}
+
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -85,6 +91,141 @@ export default function WorkflowBuilderPage() {
     isExecutingRef.current = isRunning;
   }, [isRunning]);
 
+  const startGlobalPolling = (runId: string) => {
+    if (typeof window === 'undefined') return;
+
+    if (window.activePollInterval) {
+      clearInterval(window.activePollInterval);
+    }
+
+    useWorkflowStore.getState().setIsRunning(true);
+    setIsExecuting(true);
+    isExecutingRef.current = true;
+    pollActiveRef.current = true;
+
+    window.activePollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/runs/${runId}`);
+        if (!res.ok) throw new Error('Failed to fetch run status');
+        const data = await res.json();
+
+        const executions = data.nodeExecutions || [];
+        const runFinished = data.status === 'SUCCESS' || data.status === 'FAILED';
+
+        // 1. Update Zustand store nodes & edges
+        const liveNodes = useWorkflowStore.getState().nodes;
+        const liveEdges = useWorkflowStore.getState().edges;
+
+        const updatedNodes = liveNodes.map((node) => {
+          const exec = executions.find((e: any) => e.nodeId === node.id);
+          if (!exec) return node;
+
+          if (exec.status === 'RUNNING') {
+            return { ...node, data: { ...node.data, isRunning: true } };
+          } else if (exec.status === 'SUCCESS') {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                isRunning: false,
+                duration: exec.duration,
+                ...(node.type === 'gemini' && { response: exec.output?.response || '', output: exec.output || {} }),
+                ...(node.type === 'cropImage' && { output: exec.output || {} }),
+                ...(node.type === 'response' && {
+                  result: exec.output?.result || '',
+                  output: exec.output || {},
+                  inputs: {
+                    ...node.data.inputs,
+                    result: exec.output?.result || '',
+                  }
+                }),
+                ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
+              }
+            };
+          } else if (exec.status === 'FAILED') {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                isRunning: false,
+                duration: exec.duration,
+                error: exec.errorMessage || 'Execution failed'
+              }
+            };
+          }
+          return node;
+        });
+
+        const updatedEdges = liveEdges.map((e) => {
+          if (runFinished) {
+            return { ...e, data: { ...e.data, isRunning: false } };
+          }
+          const sourceExec = executions.find((ex: any) => ex.nodeId === e.source);
+          const targetExec = executions.find((ex: any) => ex.nodeId === e.target);
+          const isEdgeActive = sourceExec?.status === 'SUCCESS' && (targetExec?.status === 'RUNNING' || targetExec?.status === 'PENDING');
+          return { ...e, data: { ...e.data, isRunning: isEdgeActive } };
+        });
+
+        useWorkflowStore.setState({
+          nodes: updatedNodes,
+          edges: updatedEdges,
+        });
+
+        // 2. Update run history state
+        const durationStr = runFinished
+          ? data.duration.toFixed(1) + 's'
+          : (Math.max(0, Date.now() - new Date(data.timestamp).getTime()) / 1000).toFixed(1) + 's';
+
+        setRunHistory((prev) =>
+          prev.map((item) =>
+            item.id === runId
+              ? {
+                  ...item,
+                  status: data.status,
+                  duration: durationStr,
+                  nodeExecutions: executions,
+                }
+              : item
+          )
+        );
+
+        if (runFinished) {
+          if (window.activePollInterval) {
+            clearInterval(window.activePollInterval);
+            window.activePollInterval = undefined;
+          }
+          useWorkflowStore.getState().setIsRunning(false);
+          setIsExecuting(false);
+          isExecutingRef.current = false;
+          pollActiveRef.current = false;
+        }
+      } catch (err) {
+        console.error('Global polling error:', err);
+      }
+    }, 1500);
+  };
+
+  const stopGlobalPolling = () => {
+    if (typeof window !== 'undefined' && window.activePollInterval) {
+      clearInterval(window.activePollInterval);
+      window.activePollInterval = undefined;
+    }
+    useWorkflowStore.getState().setIsRunning(false);
+    setIsExecuting(false);
+    isExecutingRef.current = false;
+    pollActiveRef.current = false;
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && window.activePollInterval) {
+        clearInterval(window.activePollInterval);
+        window.activePollInterval = undefined;
+      }
+    };
+  }, []);
+
   // --- INITIALIZE & LOAD CANVAS DATA ---
   useEffect(() => {
     async function loadWorkflow() {
@@ -155,7 +296,7 @@ export default function WorkflowBuilderPage() {
             const runningUiRun = history.find((r: any) => r.triggerType === 'UI' && r.status === 'RUNNING');
             if (runningUiRun) {
               activeUiRunIdRef.current = runningUiRun.id;
-              useWorkflowStore.getState().startPolling(runningUiRun.id);
+              startGlobalPollingRef.current(runningUiRun.id);
               pollActiveRef.current = true;
             } else {
               // Fallback: if no UI runs are running, check if latest run is RUNNING (could be API)
@@ -164,7 +305,7 @@ export default function WorkflowBuilderPage() {
                 if (latestRun.triggerType === 'UI') {
                   activeUiRunIdRef.current = latestRun.id;
                 }
-                useWorkflowStore.getState().startPolling(latestRun.id);
+                startGlobalPollingRef.current(latestRun.id);
                 pollActiveRef.current = true;
               }
             }
@@ -289,8 +430,8 @@ export default function WorkflowBuilderPage() {
               pollActiveRef.current = true;
             } else {
               if (activeUiRunIdRef.current) {
-                if (!useWorkflowStore.getState().isRunning) {
-                  useWorkflowStore.getState().startPolling(activeUiRunIdRef.current);
+                if (!useWorkflowStore.getState().isRunning && !window.activePollInterval) {
+                  startGlobalPollingRef.current(activeUiRunIdRef.current);
                 }
                 pollActiveRef.current = true;
               } else {
@@ -298,13 +439,10 @@ export default function WorkflowBuilderPage() {
                 const activeRunningRun = history.find((r) => r.status === 'RUNNING' && !manuallyStoppedRunIdsRef.current.has(r.id));
                 if (activeRunningRun) {
                   activeUiRunIdRef.current = activeRunningRun.id;
-                  useWorkflowStore.getState().startPolling(activeRunningRun.id);
+                  startGlobalPollingRef.current(activeRunningRun.id);
                   pollActiveRef.current = true;
                 } else {
-                  if (useWorkflowStore.getState().isRunning) {
-                    useWorkflowStore.getState().stopPolling();
-                  }
-                  pollActiveRef.current = false;
+                  stopGlobalPollingRef.current();
                 }
               }
             }
@@ -349,102 +487,7 @@ export default function WorkflowBuilderPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // --- POLL RUNNING RUN DETAILS (FOR LIVE CANVAS HIGHLIGHTS) ---
-  // Only fires for actively RUNNING executions. Never overwrites canvas state for completed/failed runs
-  // to avoid flickering node outputs on page load.
-  useEffect(() => {
-    if (!id || id === 'new' || !activeRunId) return;
-
-    const runId = activeRunId;
-    const runStatus = activeRunStatus;
-
-    // Guard against duplicate polling loops for the same run
-    if (pollingRunIdRef.current === runId) {
-      return;
-    }
-    pollingRunIdRef.current = runId;
-
-    let active = true;
-
-    const fetchDetails = async () => {
-      try {
-        const res = await fetch(`/api/runs/${runId}`);
-        if (!active || manuallyStoppedRunIdsRef.current.has(runId)) {
-          return;
-        }
-
-        if (res.ok) {
-          const runState = await res.json();
-          if (!active || manuallyStoppedRunIdsRef.current.has(runId)) {
-            return;
-          }
-
-          const executions = runState.nodeExecutions || [];
-
-          // 2. Update runHistory and execution state
-          const runFinished = runState.status === 'SUCCESS' || runState.status === 'FAILED';
-          if (runFinished) {
-            setIsExecuting(false);
-            isExecutingRef.current = false;
-            activeUiRunIdRef.current = null;
-            pollActiveRef.current = false;
-            active = false; // Stop the polling loop
-
-            const finalDuration = runState.duration.toFixed(1) + 's';
-            setRunHistory((prev) =>
-              prev.map((item) =>
-                item.id === runId
-                  ? { ...item, status: runState.status, duration: finalDuration, nodeExecutions: executions }
-                  : item
-              )
-            );
-          } else {
-            // Run is still running: update node executions and preserve local ticking duration
-            setRunHistory((prev) =>
-              prev.map((item) => {
-                if (item.id === runId) {
-                  // Merge: preserve local ticked duration for any RUNNING nodes
-                  const mergedExecutions = executions.map((serverExec: any) => {
-                    const existingExec = item.nodeExecutions?.find((e: any) => e.id === serverExec.id);
-                    if (serverExec.status === 'RUNNING' && existingExec) {
-                      return {
-                        ...serverExec,
-                        duration: existingExec.duration,
-                      };
-                    }
-                    return serverExec;
-                  });
-
-                  return {
-                    ...item,
-                    nodeExecutions: mergedExecutions,
-                  };
-                }
-                return item;
-              })
-            );
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching execution details:', err);
-      }
-    };
-
-    if (runStatus === 'RUNNING') {
-      const poll = async () => {
-        if (!active) return;
-        await fetchDetails();
-        if (active) {
-          setTimeout(poll, 800);
-        }
-      };
-      poll();
-      return () => {
-        active = false;
-        pollingRunIdRef.current = null;
-      };
-    }
-  }, [activeRunId, activeRunStatus, id]);
+  // Removed concurrent visual highlights poller in favor of window.activePollInterval
 
   // --- RENAME HANDLERS ---
   const handleStartRename = () => { setTempName(name); setIsEditingName(true); };
@@ -487,7 +530,7 @@ export default function WorkflowBuilderPage() {
   // --- STOP WORKFLOW ---
   const handleStopWorkflow = async () => {
     // Stop Zustand store polling
-    useWorkflowStore.getState().stopPolling();
+    stopGlobalPollingRef.current();
 
     // Immediately kill the polling loop and reset all start/run refs
     pollActiveRef.current = false;
@@ -642,7 +685,7 @@ export default function WorkflowBuilderPage() {
 
       isStartingRunRef.current = false;
       // Start Zustand store polling
-      useWorkflowStore.getState().startPolling(runId);
+      startGlobalPollingRef.current(runId);
     } catch (err) {
       console.error('Trigger workflow execution failed:', err);
       alert('Failed to start workflow execution.');
@@ -728,9 +771,13 @@ export default function WorkflowBuilderPage() {
 
   const handleRunWorkflowRef = useRef(handleRunWorkflow);
   const handleStopWorkflowRef = useRef(handleStopWorkflow);
+  const startGlobalPollingRef = useRef<(runId: string) => void>(() => {});
+  const stopGlobalPollingRef = useRef<() => void>(() => {});
   useEffect(() => {
     handleRunWorkflowRef.current = handleRunWorkflow;
     handleStopWorkflowRef.current = handleStopWorkflow;
+    startGlobalPollingRef.current = startGlobalPolling;
+    stopGlobalPollingRef.current = stopGlobalPolling;
   });
 
   // Listen to node-level run event

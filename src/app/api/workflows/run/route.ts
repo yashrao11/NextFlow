@@ -440,6 +440,32 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
     }
 
     if (!parentOutput) {
+      // Fallback to manual canvas state typed in the node card itself
+      if (edge.targetHandle === 'image-input') {
+        if (!inputs.images) inputs.images = [];
+        const imgUrl = node.data?.imageUrl || '';
+        if (imgUrl) inputs.images.push(imgUrl);
+      } else if (edge.targetHandle === 'video-input') {
+        const videoVal = node.data?.uploadedVideo || null;
+        if (videoVal) inputs.video = videoVal;
+      } else if (edge.targetHandle === 'audio-input') {
+        const audioVal = node.data?.uploadedAudio || null;
+        if (audioVal) inputs.audio = audioVal;
+      } else if (edge.targetHandle === 'file-input') {
+        const fileVal = node.data?.uploadedFile || null;
+        if (fileVal) inputs.file = fileVal;
+      } else if (edge.targetHandle === 'prompt-text-input' || edge.targetHandle === 'system-text-input') {
+        const textVal = edge.targetHandle === 'prompt-text-input'
+          ? (node.data?.prompt || '')
+          : (node.data?.systemPrompt || '');
+        if (edge.targetHandle === 'prompt-text-input') {
+          inputs.prompt = textVal;
+        } else {
+          inputs.systemPrompt = textVal;
+        }
+      } else if (edge.targetHandle === 'result-input') {
+        inputs.result = node.data?.result || '';
+      }
       continue;
     }
 

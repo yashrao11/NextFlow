@@ -35,34 +35,48 @@ export const geminiPromptTask = task({
     const genAI = new GoogleGenerativeAI(apiKey);
 
     // Map UI model display name options to real Google Generative AI API IDs.
-    // Note: 'Gemini 3.x' names are aspirational UI labels — map them to the
-    // closest real model so requests never fail with a 404 model-not-found error.
     const modelMap: Record<string, string> = {
       // UI display names → real API model IDs
-      "Gemini 3.5 Flash":     "gemini-2.0-flash",
-      "Gemini 3.1 Pro":       "gemini-2.0-flash",
-      "Gemini 3.1 Flash-Lite":"gemini-2.0-flash-lite",
-      "Gemini 2.5 Pro":       "gemini-2.5-pro-preview-06-05",
-      "Gemini 2.5 Flash":     "gemini-2.5-flash-preview-05-20",
+      "Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
+      "Gemini 3.1 Flash Lite": "gemini-3.1-flash-lite",
+      "Gemini 3.5 Flash":      "gemini-3.5-flash",
+      "Gemini 2 Flash":        "gemini-2.0-flash",
+      "Gemini 2 Flash Lite":   "gemini-2.0-flash-lite",
+      "Gemini 2.5 Flash":      "gemini-2.5-flash",
+      "Gemini 2.5 Flash Lite": "gemini-2.5-flash-lite",
+      "Gemini 3.1 Pro":        "gemini-3.1-pro",
+      "Gemini 2.5 Pro":        "gemini-2.5-pro",
       // Also accept raw API IDs directly
-      "gemini-2.5-pro":       "gemini-2.5-pro-preview-06-05",
-      "gemini-2.5-flash":     "gemini-2.5-flash-preview-05-20",
-      "gemini-2.0-flash":     "gemini-2.0-flash",
-      "gemini-2.0-flash-lite":"gemini-2.0-flash-lite",
-      "gemini-1.5-flash":     "gemini-1.5-flash",
-      "gemini-1.5-pro":       "gemini-1.5-pro",
+      "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+      "gemini-3.5-flash":      "gemini-3.5-flash",
+      "gemini-2.0-flash":      "gemini-2.0-flash",
+      "gemini-2.0-flash-lite": "gemini-2.0-flash-lite",
+      "gemini-2.5-flash":      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
+      "gemini-3.1-pro":        "gemini-3.1-pro",
+      "gemini-2.5-pro":        "gemini-2.5-pro",
+      "gemini-1.5-flash":      "gemini-1.5-flash",
+      "gemini-1.5-pro":        "gemini-1.5-pro",
+      "gemini-2.5-pro-preview-06-05": "gemini-2.5-pro-preview-06-05",
+      "gemini-2.5-flash-preview-05-20": "gemini-2.5-flash-preview-05-20",
     };
 
-    const selectedModelId = modelMap[payload.model || ""] || "gemini-2.0-flash";
+    const selectedModelId = modelMap[payload.model || ""] || "gemini-3.1-flash-lite";
 
-    // Fallback chain — all IDs here are real, verified Google model names.
-    // Earlier entries are tried first; later ones are safety nets.
+    // Fallback chain in the requested order:
+    // Gemini 3.1 Flash-Lite -> Gemini 3.5 Flash -> Gemini 2 Flash -> Gemini 2 Flash Lite -> Gemini 2.5 Flash -> Gemini 2.5 Flash Lite -> and other models.
     const modelCandidates = Array.from(new Set([
       selectedModelId,
+      "gemini-3.1-flash-lite",
+      "gemini-3.5-flash",
       "gemini-2.0-flash",
+      "gemini-2.0-flash-lite",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
+      "gemini-3.1-pro",
+      "gemini-2.5-pro",
       "gemini-1.5-flash",
       "gemini-1.5-pro",
-      "gemini-2.0-flash-lite",
       "gemini-2.5-flash-preview-05-20",
       "gemini-2.5-pro-preview-06-05",
     ]));

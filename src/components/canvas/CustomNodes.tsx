@@ -1656,11 +1656,14 @@ export function GeminiNode({ id, data }: NodeProps) {
                   }}
                   className="text-xs bg-white border border-[#dadce0] rounded px-2 py-1 focus:outline-none focus:border-purple-500 text-zinc-700 w-full font-medium nodrag"
                 >
-                  <option value="Gemini 3.5 Flash">Gemini 3.5 Flash</option>
-                  <option value="Gemini 3.1 Pro">Gemini 3.1 Pro</option>
                   <option value="Gemini 3.1 Flash-Lite">Gemini 3.1 Flash-Lite</option>
-                  <option value="Gemini 2.5 Pro">Gemini 2.5 Pro</option>
+                  <option value="Gemini 3.5 Flash">Gemini 3.5 Flash</option>
+                  <option value="Gemini 2 Flash">Gemini 2 Flash</option>
+                  <option value="Gemini 2 Flash Lite">Gemini 2 Flash Lite</option>
                   <option value="Gemini 2.5 Flash">Gemini 2.5 Flash</option>
+                  <option value="Gemini 2.5 Flash Lite">Gemini 2.5 Flash Lite</option>
+                  <option value="Gemini 3.1 Pro">Gemini 3.1 Pro</option>
+                  <option value="Gemini 2.5 Pro">Gemini 2.5 Pro</option>
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-3">

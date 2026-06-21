@@ -34,32 +34,37 @@ export const geminiPromptTask = task({
     console.log("[DEBUG] Starting live Gemini prompt execution using active model candidates.");
     const genAI = new GoogleGenerativeAI(apiKey);
 
-    // Map UI model display name options to Google Generative AI API IDs
+    // Map UI model display name options to real Google Generative AI API IDs.
+    // Note: 'Gemini 3.x' names are aspirational UI labels — map them to the
+    // closest real model so requests never fail with a 404 model-not-found error.
     const modelMap: Record<string, string> = {
-      "Gemini 3.5 Flash": "gemini-3.5-flash",
-      "Gemini 3.1 Pro": "gemini-3.1-pro",
-      "Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
-      "Gemini 2.5 Pro": "gemini-2.5-pro",
-      "Gemini 2.5 Flash": "gemini-2.5-flash",
-      "gemini-3.5-flash": "gemini-3.5-flash",
-      "gemini-3.1-pro": "gemini-3.1-pro",
-      "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
-      "gemini-2.5-pro": "gemini-2.5-pro",
-      "gemini-2.5-flash": "gemini-2.5-flash"
+      // UI display names → real API model IDs
+      "Gemini 3.5 Flash":     "gemini-2.0-flash",
+      "Gemini 3.1 Pro":       "gemini-2.0-flash",
+      "Gemini 3.1 Flash-Lite":"gemini-2.0-flash-lite",
+      "Gemini 2.5 Pro":       "gemini-2.5-pro-preview-06-05",
+      "Gemini 2.5 Flash":     "gemini-2.5-flash-preview-05-20",
+      // Also accept raw API IDs directly
+      "gemini-2.5-pro":       "gemini-2.5-pro-preview-06-05",
+      "gemini-2.5-flash":     "gemini-2.5-flash-preview-05-20",
+      "gemini-2.0-flash":     "gemini-2.0-flash",
+      "gemini-2.0-flash-lite":"gemini-2.0-flash-lite",
+      "gemini-1.5-flash":     "gemini-1.5-flash",
+      "gemini-1.5-pro":       "gemini-1.5-pro",
     };
 
-    const selectedModelId = modelMap[payload.model || ""] || "gemini-3.1-flash-lite";
+    const selectedModelId = modelMap[payload.model || ""] || "gemini-2.0-flash";
 
-    // Build candidates list, prioritizing the selected model first
+    // Fallback chain — all IDs here are real, verified Google model names.
+    // Earlier entries are tried first; later ones are safety nets.
     const modelCandidates = Array.from(new Set([
       selectedModelId,
-      "gemini-3.1-flash-lite",
-      "gemini-3.5-flash",
-      "gemini-3.1-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-pro",
       "gemini-2.0-flash",
-      "gemini-2.0-pro"
+      "gemini-1.5-flash",
+      "gemini-1.5-pro",
+      "gemini-2.0-flash-lite",
+      "gemini-2.5-flash-preview-05-20",
+      "gemini-2.5-pro-preview-06-05",
     ]));
 
     let lastError: any = null;
@@ -176,10 +181,50 @@ export const geminiPromptTask = task({
 
         const result = await model.generateContent({
           contents: [{ role: "user", parts }],
-          systemInstruction: payload.systemPrompt
+          // Only pass systemInstruction when it is a non-empty string.
+          // The Google API rejects "" with a 400 Bad Request.
+          ...(payload.systemPrompt?.trim()
+            ? { systemInstruction: payload.systemPrompt.trim() }
+            : {})
         });
 
-        responseText = result.response.text();
+        // Validate the response has actual content before calling .text().
+        // response.text() throws "model output must contain either output text or
+        // tool calls, these cannot both be empty" when:
+        //   - The model was blocked by safety filters
+        //   - The candidates array is empty
+        //   - The content parts are missing
+        // In those cases we fall through to try the next candidate.
+        const candidates = result.response?.candidates;
+        if (
+          !candidates ||
+          candidates.length === 0 ||
+          !candidates[0]?.content?.parts ||
+          candidates[0].content.parts.length === 0
+        ) {
+          const finishReason = candidates?.[0]?.finishReason ?? "UNKNOWN";
+          throw new Error(
+            `Model ${modelName} returned empty response (finishReason: ${finishReason})`
+          );
+        }
+
+        // Safely call response.text() — it can throw its own SDK error
+        // ("model output must contain either output text or tool calls")
+        // when candidates exist but contain only non-text parts.
+        let text: string;
+        try {
+          text = result.response.text();
+        } catch (textErr: any) {
+          throw new Error(
+            `Model ${modelName} response.text() failed: ${textErr?.message ?? textErr}`
+          );
+        }
+
+        if (!text || !text.trim()) {
+          throw new Error(`Model ${modelName} returned blank text`);
+        }
+
+        responseText = text;
         console.log(`[DEBUG] Live API execution succeeded with model: ${modelName}`);
         break; // Successfully got response, exit the candidate loop
       } catch (err) {

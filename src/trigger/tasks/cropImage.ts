@@ -12,8 +12,8 @@ export const cropImageTask = task({
     width: number;
     height: number;
   }) => {
-    // 1. Offset-adjusted delay (25s)
-    await new Promise((resolve) => setTimeout(resolve, 25000));
+    // Reset strictly back to 30 seconds (30000ms)
+    await new Promise((resolve) => setTimeout(resolve, 30000));
 
     console.log("[DEBUG] Starting live crop-image task using Jimp.", {
       hasFilePath: !!payload.imageFilePath,

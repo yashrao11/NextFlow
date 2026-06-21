@@ -950,6 +950,15 @@ export function GeminiNode({ id, data }: NodeProps) {
   const [showSettings, setShowSettings] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [responseCopied, setResponseCopied] = useState(false);
+
+  const handleCopyResponse = () => {
+    if (!responseText) return;
+    navigator.clipboard.writeText(responseText).then(() => {
+      setResponseCopied(true);
+      setTimeout(() => setResponseCopied(false), 1800);
+    });
+  };
 
   const handleDeleteNode = () => {
     saveStateToHistory();
@@ -1687,8 +1696,31 @@ export function GeminiNode({ id, data }: NodeProps) {
 
         {/* Response preview */}
         <div className="border-t border-zinc-100 pt-3.5 space-y-2 relative">
-          <div className="flex items-center select-none">
+          <div className="flex items-center justify-between select-none">
             <span className="text-[11px] text-zinc-500 font-semibold">Response</span>
+            {responseText && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopyResponse();
+                }}
+                title="Copy response"
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all nodrag
+                  text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 active:scale-95"
+              >
+                {responseCopied ? (
+                  <>
+                    <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span className="text-emerald-500">Copied!</span>
+                  </>
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+              </button>
+            )}
           </div>
           <div className="w-full min-h-[100px] max-h-56 bg-[#f8f9fa] border border-[#dadce0] rounded-xl p-3 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 nodrag nowheel">
             {responseText ? (
@@ -1736,6 +1768,20 @@ export function ResponseNode({ id, data }: NodeProps) {
   const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
   const [menuOpen, setMenuOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [resultCopied, setResultCopied] = useState(false);
+
+  const isBase64Image = (str: string) => {
+    return typeof str === 'string' && (str.startsWith('data:image/') || str.startsWith('http://') || str.startsWith('https://'));
+  };
+
+  const handleCopyResult = () => {
+    if (!result || isBase64Image(result)) return;
+    navigator.clipboard.writeText(result).then(() => {
+      setResultCopied(true);
+      setTimeout(() => setResultCopied(false), 1800);
+    });
+  };
+
 
   const handleDeleteNode = () => {
     saveStateToHistory();
@@ -1753,9 +1799,7 @@ export function ResponseNode({ id, data }: NodeProps) {
     });
   };
 
-  const isBase64Image = (str: string) => {
-    return typeof str === 'string' && (str.startsWith('data:image/') || str.startsWith('http://') || str.startsWith('https://'));
-  };
+
 
   const getCropWidth = (): number | undefined => {
     const incomingEdge = edges.find((e) => e.target === id && e.targetHandle === 'result-input');
@@ -1856,8 +1900,31 @@ export function ResponseNode({ id, data }: NodeProps) {
           className={getHandleClass('orange')}
           style={{ left: '-22px', top: '10px' }}
         />
-        <div className="flex items-center gap-1 select-none">
+        <div className="flex items-center justify-between gap-1 select-none">
           <span className="text-[10px] text-zinc-600 font-semibold">result</span>
+          {result && !isBase64Image(result) && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCopyResult();
+              }}
+              title="Copy result"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all nodrag
+                text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 active:scale-95"
+            >
+              {resultCopied ? (
+                <>
+                  <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span className="text-emerald-500">Copied!</span>
+                </>
+              ) : (
+                <Copy className="w-3 h-3" />
+              )}
+            </button>
+          )}
         </div>
         {result ? (
           <div className="w-full min-h-[100px] max-h-56 bg-zinc-50 border border-zinc-200 rounded-lg p-3 overflow-y-auto text-xs text-zinc-800 font-mono leading-relaxed nodrag nowheel">

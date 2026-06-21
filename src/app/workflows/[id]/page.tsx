@@ -38,6 +38,60 @@ interface RunHistoryItem {
   nodeExecutions?: any[];
 }
 
+function NodeExecutionRow({ nodeExecution }: { nodeExecution: any }) {
+  const [elapsed, setElapsed] = useState<number>(0);
+
+  useEffect(() => {
+    if (nodeExecution.status !== 'RUNNING') {
+      return;
+    }
+
+    const start = nodeExecution.startedAt ? new Date(nodeExecution.startedAt).getTime() : Date.now();
+    setElapsed((Date.now() - start) / 1000);
+
+    const interval = setInterval(() => {
+      const elapsedSeconds = (Date.now() - new Date(nodeExecution.startedAt || new Date()).getTime()) / 1000;
+      setElapsed(elapsedSeconds);
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [nodeExecution.status, nodeExecution.startedAt]);
+
+  let statusColor = 'text-zinc-400';
+  let statusDot = 'bg-zinc-300';
+  if (nodeExecution.status === 'SUCCESS') {
+    statusColor = 'text-emerald-600 font-semibold';
+    statusDot = 'bg-emerald-500';
+  } else if (nodeExecution.status === 'FAILED') {
+    statusColor = 'text-rose-600 font-semibold';
+    statusDot = 'bg-rose-500';
+  } else if (nodeExecution.status === 'RUNNING') {
+    statusColor = 'text-amber-600 font-bold animate-pulse';
+    statusDot = 'bg-amber-500 animate-pulse';
+  }
+
+  // Map internal names to friendly API call names
+  let friendlyName = nodeExecution.nodeName;
+  if (nodeExecution.nodeName === 'gemini') friendlyName = 'Trigger.dev Gemini API Call';
+  else if (nodeExecution.nodeName === 'cropImage') friendlyName = 'Trigger.dev Crop Task';
+  else if (nodeExecution.nodeName === 'requestInputs') friendlyName = 'Prisma DB / Fetch Inputs';
+  else if (nodeExecution.nodeName === 'response') friendlyName = 'Prisma DB / Write Output';
+
+  const displayDuration = nodeExecution.status === 'RUNNING'
+    ? `${elapsed.toFixed(1)}s`
+    : `${(nodeExecution.duration || 0).toFixed(1)}s`;
+
+  return (
+    <div className="flex items-center justify-between text-[10px] text-zinc-500">
+      <div className="flex items-center gap-1.5">
+        <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
+        <span className={statusColor}>{friendlyName}</span>
+      </div>
+      <span className="font-mono text-zinc-450">{displayDuration}</span>
+    </div>
+  );
+}
+
 /**
  * WorkflowBuilderPage
  * Main workspace React page for designing and executing visual canvas workflows.
@@ -226,6 +280,30 @@ export default function WorkflowBuilderPage() {
     };
   }, []);
 
+  // Auto-reconnect to active execution on load
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    async function checkActiveRun() {
+      try {
+        const response = await fetch(`/api/workflows/${id}/runs/latest`);
+        if (!response.ok) return;
+        const latestRun = await response.json();
+
+        if (latestRun && latestRun.status === 'RUNNING') {
+          activeUiRunIdRef.current = latestRun.id;
+          useWorkflowStore.getState().setIsRunning(true);
+          setIsExecuting(true);
+          isExecutingRef.current = true;
+          pollActiveRef.current = true;
+          startGlobalPolling(latestRun.id);
+        }
+      } catch (err) {
+        console.error('Failed to reconnect active run on load:', err);
+      }
+    }
+    checkActiveRun();
+  }, [id]);
+
   // --- INITIALIZE & LOAD CANVAS DATA ---
   useEffect(() => {
     async function loadWorkflow() {
@@ -291,24 +369,6 @@ export default function WorkflowBuilderPage() {
               };
             });
             setRunHistory(history);
-
-            // Sync isExecuting on initial load if there is a running UI run
-            const runningUiRun = history.find((r: any) => r.triggerType === 'UI' && r.status === 'RUNNING');
-            if (runningUiRun) {
-              activeUiRunIdRef.current = runningUiRun.id;
-              startGlobalPollingRef.current(runningUiRun.id);
-              pollActiveRef.current = true;
-            } else {
-              // Fallback: if no UI runs are running, check if latest run is RUNNING (could be API)
-              const latestRun = history[0];
-              if (latestRun && latestRun.status === 'RUNNING') {
-                if (latestRun.triggerType === 'UI') {
-                  activeUiRunIdRef.current = latestRun.id;
-                }
-                startGlobalPollingRef.current(latestRun.id);
-                pollActiveRef.current = true;
-              }
-            }
           } else {
             setRunHistory([]);
           }
@@ -425,27 +485,6 @@ export default function WorkflowBuilderPage() {
               }
               return prev;
             });
-
-            if (isStartingRunRef.current) {
-              pollActiveRef.current = true;
-            } else {
-              if (activeUiRunIdRef.current) {
-                if (!useWorkflowStore.getState().isRunning && !window.activePollInterval) {
-                  startGlobalPollingRef.current(activeUiRunIdRef.current);
-                }
-                pollActiveRef.current = true;
-              } else {
-                // Sync with any running run in history
-                const activeRunningRun = history.find((r) => r.status === 'RUNNING' && !manuallyStoppedRunIdsRef.current.has(r.id));
-                if (activeRunningRun) {
-                  activeUiRunIdRef.current = activeRunningRun.id;
-                  startGlobalPollingRef.current(activeRunningRun.id);
-                  pollActiveRef.current = true;
-                } else {
-                  stopGlobalPollingRef.current();
-                }
-              }
-            }
           }
         }
       } catch (err) {
@@ -989,37 +1028,9 @@ export default function WorkflowBuilderPage() {
                               };
                               return [...run.nodeExecutions]
                                 .sort((a, b) => (typeOrder[a.nodeName] || 99) - (typeOrder[b.nodeName] || 99))
-                                .map((exec: any) => {
-                                  let statusColor = 'text-zinc-400';
-                                  let statusDot = 'bg-zinc-300';
-                                  if (exec.status === 'SUCCESS') {
-                                    statusColor = 'text-emerald-600 font-semibold';
-                                    statusDot = 'bg-emerald-500';
-                                  } else if (exec.status === 'FAILED') {
-                                    statusColor = 'text-rose-600 font-semibold';
-                                    statusDot = 'bg-rose-500';
-                                  } else if (exec.status === 'RUNNING') {
-                                    statusColor = 'text-amber-600 font-bold animate-pulse';
-                                    statusDot = 'bg-amber-500 animate-pulse';
-                                  }
-
-                                  // Map internal names to friendly API call names
-                                  let friendlyName = exec.nodeName;
-                                  if (exec.nodeName === 'gemini') friendlyName = 'Trigger.dev Gemini API Call';
-                                  else if (exec.nodeName === 'cropImage') friendlyName = 'Trigger.dev Crop Task';
-                                  else if (exec.nodeName === 'requestInputs') friendlyName = 'Prisma DB / Fetch Inputs';
-                                  else if (exec.nodeName === 'response') friendlyName = 'Prisma DB / Write Output';
-
-                                  return (
-                                    <div key={exec.id} className="flex items-center justify-between text-[10px] text-zinc-500">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
-                                        <span className={statusColor}>{friendlyName}</span>
-                                      </div>
-                                      <span className="font-mono text-zinc-450">{exec.duration ? exec.duration.toFixed(1) + 's' : '0.0s'}</span>
-                                    </div>
-                                  );
-                                });
+                                .map((exec: any) => (
+                                  <NodeExecutionRow nodeExecution={exec} key={exec.id} />
+                                ));
                             })()
                           ) : (
                             <div className="text-[10px] text-zinc-400 italic">No steps logged.</div>

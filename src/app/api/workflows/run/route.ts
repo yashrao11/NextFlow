@@ -160,7 +160,14 @@ async function pollTriggerRun(
           run.status === 'CRASHED' ||
           run.status === 'TIMED_OUT'
         ) {
-          throw new Error(`Trigger.dev task run failed: ${run.status}`);
+          // The Trigger.dev task itself failed — run the local fallback immediately
+          // rather than propagating the failure, so the node always produces output.
+          console.warn(
+            `[Run Poller] Trigger.dev task ${triggerRunId} ended with status ${run.status}. ` +
+            `Falling back to local execution.`
+          );
+          const fallbackResult = await fallbackTask();
+          return { output: fallbackResult };
         }
       }
     } catch (err: any) {
@@ -302,7 +309,9 @@ async function localGeminiFallback(
       console.log(`[DEBUG] Local fallback: Attempting live API execution with Google model: ${candidateModel}`);
       const model = genAI.getGenerativeModel({
         model: candidateModel,
-        systemInstruction: systemPrompt || undefined,
+        // Only pass systemInstruction when it is a non-empty string.
+        // The Google API rejects "" with a 400 Bad Request.
+        ...(systemPrompt?.trim() ? { systemInstruction: systemPrompt.trim() } : {}),
       });
 
       // Prepare request payload content structures using Part objects (wrapping text inside { text: ... })
@@ -399,12 +408,37 @@ async function localGeminiFallback(
 }
 
 /**
+ * extractFieldIdFromHandle
+ * Parses a react-flow sourceHandle string to extract the dynamic field ID prefix.
+ *
+ * Handle formats emitted by RequestInputs node:
+ *   'field-1718593203456-text-output'  → fieldId = 'field-1718593203456'
+ *   'text_field-text-output'           → fieldId = 'text_field'
+ *   'image_field-image-output'         → fieldId = 'image_field'
+ *
+ * Strategy: strip the last two dash-separated tokens (the type + direction suffix,
+ * e.g. 'text' and 'output'), then join the rest back with '-'.
+ */
+function extractFieldIdFromHandle(sourceHandle: string | undefined): string {
+  if (!sourceHandle) return '';
+  const parts = sourceHandle.split('-');
+  // Need at least 3 parts for a valid dynamic handle (fieldId + type + direction)
+  if (parts.length < 3) return sourceHandle;
+  return parts.slice(0, parts.length - 2).join('-');
+}
+
+/**
  * resolveNodeInputs
  * Walks back through connected edges to collect execution outputs from parent nodes.
  * Maps parent node outputs directly into parameter keys expected by the downstream node.
  * Uses historical workflow runs as cache if parents did not run in this execution scope.
+ *
+ * Dynamic field resolution:
+ *   For Request-Inputs parent nodes, the sourceHandle encodes the field ID and type,
+ *   e.g. 'field-1718593203456-text-output'. We extract the fieldId prefix dynamically
+ *   so any user-created field is resolved correctly regardless of its name or timestamp.
  */
-async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promise<any> {
+async function resolveNodeInputs(node: any, runId: string, edges: any[], allNodes: any[] = []): Promise<any> {
   const parentEdges = edges.filter((e) => e.target === node.id);
   const inputs: any = {};
 
@@ -439,22 +473,66 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       }
     }
 
+    // For Request-Inputs nodes, also look up the live node data from the canvas
+    // so we can read the current field values even when there is no prior run output.
+    const parentNode = allNodes.find((n: any) => n.id === edge.source);
+
     if (!parentOutput) {
       // Fallback to manual canvas state typed in the node card itself
       if (edge.targetHandle === 'image-input') {
+        // Try dynamic field lookup from parent requestInputs node first
+        if (parentNode?.type === 'requestInputs' && edge.sourceHandle) {
+          const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+          const field = parentNode.data?.fields?.find((f: any) => f.id === fieldId || f.name === fieldId);
+          const val = field?.value || '';
+          if (val) {
+            if (!inputs.images) inputs.images = [];
+            inputs.images.push(val);
+            continue;
+          }
+        }
         if (!inputs.images) inputs.images = [];
         const imgUrl = node.data?.imageUrl || '';
         if (imgUrl) inputs.images.push(imgUrl);
       } else if (edge.targetHandle === 'video-input') {
+        if (parentNode?.type === 'requestInputs' && edge.sourceHandle) {
+          const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+          const field = parentNode.data?.fields?.find((f: any) => f.id === fieldId || f.name === fieldId);
+          const val = field?.value || null;
+          if (val) { inputs.video = val; continue; }
+        }
         const videoVal = node.data?.uploadedVideo || null;
         if (videoVal) inputs.video = videoVal;
       } else if (edge.targetHandle === 'audio-input') {
+        if (parentNode?.type === 'requestInputs' && edge.sourceHandle) {
+          const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+          const field = parentNode.data?.fields?.find((f: any) => f.id === fieldId || f.name === fieldId);
+          const val = field?.value || null;
+          if (val) { inputs.audio = val; continue; }
+        }
         const audioVal = node.data?.uploadedAudio || null;
         if (audioVal) inputs.audio = audioVal;
       } else if (edge.targetHandle === 'file-input') {
+        if (parentNode?.type === 'requestInputs' && edge.sourceHandle) {
+          const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+          const field = parentNode.data?.fields?.find((f: any) => f.id === fieldId || f.name === fieldId);
+          const val = field?.value || null;
+          if (val) { inputs.file = val; continue; }
+        }
         const fileVal = node.data?.uploadedFile || null;
         if (fileVal) inputs.file = fileVal;
       } else if (edge.targetHandle === 'prompt-text-input' || edge.targetHandle === 'system-text-input') {
+        // Try dynamic field lookup from parent requestInputs node first
+        if (parentNode?.type === 'requestInputs' && edge.sourceHandle) {
+          const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+          const field = parentNode.data?.fields?.find((f: any) => f.id === fieldId || f.name === fieldId);
+          const val = field?.value || '';
+          if (val) {
+            if (edge.targetHandle === 'prompt-text-input') inputs.prompt = val;
+            else inputs.systemPrompt = val;
+            continue;
+          }
+        }
         const textVal = edge.targetHandle === 'prompt-text-input'
           ? (node.data?.prompt || '')
           : (node.data?.systemPrompt || '');
@@ -464,19 +542,28 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
           inputs.systemPrompt = textVal;
         }
       } else if (edge.targetHandle === 'result-input') {
+        if (parentNode?.type === 'requestInputs' && edge.sourceHandle) {
+          const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+          const field = parentNode.data?.fields?.find((f: any) => f.id === fieldId || f.name === fieldId);
+          const val = field?.value || '';
+          if (val) { inputs.result = val; continue; }
+        }
         inputs.result = node.data?.result || '';
       }
       continue;
     }
 
-    // 3. Map parent handles to expected target handle parameter slots
+    // 3. Map parent handles to expected target handle parameter slots.
+    //    For requestInputs parents, extract the fieldId dynamically from the sourceHandle
+    //    instead of relying on a naive startsWith match.
     if (edge.targetHandle === 'image-input') {
       if (!inputs.images) inputs.images = [];
       let imgUrl = '';
       if (parentOutput.imageUrl) {
         imgUrl = parentOutput.imageUrl;
-      } else if (parentOutput.fields) {
-        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
+      } else if (parentOutput.fields && edge.sourceHandle) {
+        const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+        const field = parentOutput.fields.find((f: any) => f.id === fieldId || f.name === fieldId);
         imgUrl = field?.value || '';
       }
       if (imgUrl) inputs.images.push(imgUrl);
@@ -484,52 +571,49 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       let videoVal = null;
       if (parentOutput.video) {
         videoVal = parentOutput.video;
-      } else if (parentOutput.fields) {
-        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
+      } else if (parentOutput.fields && edge.sourceHandle) {
+        const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+        const field = parentOutput.fields.find((f: any) => f.id === fieldId || f.name === fieldId);
         videoVal = field?.value || null;
       } else if (parentOutput.result) {
         videoVal = parentOutput.result;
       }
-      if (videoVal) {
-        inputs.video = videoVal;
-      }
+      if (videoVal) inputs.video = videoVal;
     } else if (edge.targetHandle === 'audio-input') {
       let audioVal = null;
       if (parentOutput.audio) {
         audioVal = parentOutput.audio;
-      } else if (parentOutput.fields) {
-        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
+      } else if (parentOutput.fields && edge.sourceHandle) {
+        const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+        const field = parentOutput.fields.find((f: any) => f.id === fieldId || f.name === fieldId);
         audioVal = field?.value || null;
       } else if (parentOutput.result) {
         audioVal = parentOutput.result;
       }
-      if (audioVal) {
-        inputs.audio = audioVal;
-      }
+      if (audioVal) inputs.audio = audioVal;
     } else if (edge.targetHandle === 'file-input') {
       let fileVal = null;
       if (parentOutput.file) {
         fileVal = parentOutput.file;
-      } else if (parentOutput.fields) {
-        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
+      } else if (parentOutput.fields && edge.sourceHandle) {
+        const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+        const field = parentOutput.fields.find((f: any) => f.id === fieldId || f.name === fieldId);
         fileVal = field?.value || null;
       } else if (parentOutput.result) {
         fileVal = parentOutput.result;
       }
-      if (fileVal) {
-        inputs.file = fileVal;
-      }
+      if (fileVal) inputs.file = fileVal;
     } else if (edge.targetHandle === 'prompt-text-input' || edge.targetHandle === 'system-text-input') {
       let textVal = '';
       if (parentOutput.response) {
         textVal = parentOutput.response;
       } else if (parentOutput.result) {
         textVal = parentOutput.result;
-      } else if (parentOutput.fields) {
-        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
+      } else if (parentOutput.fields && edge.sourceHandle) {
+        const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+        const field = parentOutput.fields.find((f: any) => f.id === fieldId || f.name === fieldId);
         textVal = field?.value || '';
       }
-
       if (edge.targetHandle === 'prompt-text-input') {
         inputs.prompt = textVal;
       } else {
@@ -541,8 +625,9 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
         resultVal = parentOutput.response;
       } else if (parentOutput.imageUrl) {
         resultVal = parentOutput.imageUrl;
-      } else if (parentOutput.fields) {
-        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
+      } else if (parentOutput.fields && edge.sourceHandle) {
+        const fieldId = extractFieldIdFromHandle(edge.sourceHandle);
+        const field = parentOutput.fields.find((f: any) => f.id === fieldId || f.name === fieldId);
         resultVal = field?.value || '';
       }
       inputs.result = resultVal;
@@ -550,6 +635,67 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
   }
 
   return inputs;
+}
+
+/**
+ * syncWorkflowNodesWithOutputs
+ * At the end of a successful workflow execution, maps completed NodeExecution outputs
+ * back into the Workflow nodes JSON configuration and updates it in the database.
+ */
+async function syncWorkflowNodesWithOutputs(workflowId: string, runId: string) {
+  try {
+    const workflow = await prisma.workflow.findUnique({
+      where: { id: workflowId }
+    });
+    if (!workflow) return;
+
+    const executions = await prisma.nodeExecution.findMany({
+      where: { runId }
+    });
+
+    const nodes = typeof workflow.nodes === 'string'
+      ? JSON.parse(workflow.nodes)
+      : (workflow.nodes as any[]);
+
+    if (!Array.isArray(nodes)) return;
+
+    const updatedNodesWithOutputs = nodes.map((node: any) => {
+      const exec = executions.find((e: any) => e.nodeId === node.id);
+      if (!exec) return node;
+
+      if (exec.status === 'SUCCESS') {
+        const outputObj = exec.output as any;
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            isRunning: false,
+            duration: exec.duration,
+            ...(node.type === 'gemini' && { response: outputObj?.response || '', output: outputObj || {} }),
+            ...(node.type === 'cropImage' && { output: outputObj || {} }),
+            ...(node.type === 'response' && {
+              result: outputObj?.result || '',
+              output: outputObj || {},
+              inputs: {
+                ...(node.data?.inputs || {}),
+                result: outputObj?.result || '',
+              }
+            }),
+            ...(node.type === 'requestInputs' && { fields: outputObj?.fields || [] }),
+          }
+        };
+      }
+      return node;
+    });
+
+    await prisma.workflow.update({
+      where: { id: workflowId },
+      data: { nodes: updatedNodesWithOutputs }
+    });
+    console.log(`[Sync Outputs] Successfully updated workflow ${workflowId} nodes JSON with completed run outputs.`);
+  } catch (err) {
+    console.error('[Sync Outputs] Failed to sync run outputs to workflow canvas:', err);
+  }
 }
 
 // --- BACKGROUND PARALLEL DAG ORCHESTRATOR ---
@@ -562,6 +708,18 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
 async function executeWorkflowBackground(runId: string, nodesToExecute: any[], edgesToExecute: any[]) {
   const startTime = Date.now();
   const activeNodeIds = new Set<string>();
+  let workflowId = '';
+  try {
+    const runRecord = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { workflowId: true }
+    });
+    if (runRecord) {
+      workflowId = runRecord.workflowId;
+    }
+  } catch (e) {
+    console.error('[Orchestrator] Error fetching workflowId:', e);
+  }
 
   try {
     while (true) {
@@ -656,11 +814,11 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
             // Mark node status as RUNNING in DB
             await prisma.nodeExecution.update({
               where: { id: ex.id },
-              data: { status: 'RUNNING' },
+              data: { status: 'RUNNING', startedAt: new Date() },
             });
 
             const node = nodesToExecute.find((n) => n.id === ex.nodeId);
-            const resolvedInputs = await resolveNodeInputs(node, runId, edgesToExecute);
+            const resolvedInputs = await resolveNodeInputs(node, runId, edgesToExecute, nodesToExecute);
             let output: any = {};
 
             // Execute code logic by Node Type
@@ -669,7 +827,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
             } else if (node.type === 'response') {
               output = { result: resolvedInputs.result || '' };
             } else if (node.type === 'cropImage') {
-              const imageUrl = resolvedInputs.images?.[0] || node.data?.imageUrl || '';
+              const imageUrlVal = resolvedInputs.images?.[0] || node.data?.imageUrl || '';
               const cropData = node.data?.crop || {};
               const crop = {
                 x: typeof cropData.x === 'number' ? cropData.x : 0,
@@ -684,12 +842,12 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
               // from disk — no cloud relay bottleneck.
               const LARGE_THRESHOLD = 1024; // anything > 1 KB is treated as binary
               const cropPayload: any = { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
-              if (imageUrl.startsWith('data:image/') && imageUrl.length > LARGE_THRESHOLD) {
-                const ext = imageUrl.split(';')[0].split('/')[1] || 'png';
-                cropPayload.imageFilePath = storeImageTemp(imageUrl, ext);
+              if (imageUrlVal.startsWith('data:image/') && imageUrlVal.length > LARGE_THRESHOLD) {
+                const ext = imageUrlVal.split(';')[0].split('/')[1] || 'png';
+                cropPayload.imageFilePath = storeImageTemp(imageUrlVal, ext);
                 cropPayload.imageUrl = ''; // empty — task will read from file
               } else {
-                cropPayload.imageUrl = imageUrl;
+                cropPayload.imageUrl = imageUrlVal;
               }
 
               // Trigger async crop task using Trigger.dev v3
@@ -697,13 +855,13 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
 
               // Poll status or fall back to local execution
               const pollResult = await pollTriggerRun(triggerRun.id, runId, () =>
-                localCropFallback(imageUrl, crop.x, crop.y, crop.width, crop.height)
+                localCropFallback(imageUrlVal, crop.x, crop.y, crop.width, crop.height)
               );
               output = pollResult.output;
               durationInSeconds = pollResult.durationInSeconds;
             } else if (node.type === 'gemini') {
-              const prompt = resolvedInputs.prompt || node.data?.prompt || '';
-              const systemPrompt = resolvedInputs.systemPrompt || node.data?.systemPrompt || '';
+              const promptVal = resolvedInputs.prompt || node.data?.prompt || "Please write a response.";
+              const systemPromptVal = resolvedInputs.systemPrompt || node.data?.systemPrompt || "";
               const images = [
                 ...(resolvedInputs.images || []),
                 ...(node.data?.uploadedImages || [])
@@ -714,8 +872,8 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
 
               const LARGE_THRESHOLD = 1024;
               const triggerPayload: any = {
-                prompt,
-                systemPrompt,
+                prompt: promptVal,
+                systemPrompt: systemPromptVal,
                 // For each image: if it's a large base64 data URL, write to a temp file
                 // and pass the path. The gemini trigger task reads from disk.
                 images: images.map((img: string) => {
@@ -762,8 +920,8 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
               // Poll status or fall back to local execution
               const pollResult = await pollTriggerRun(triggerRun.id, runId, () =>
                 localGeminiFallback(
-                  prompt,
-                  systemPrompt,
+                  promptVal,
+                  systemPromptVal,
                   node.data?.model || 'Gemini 3.1 Pro',
                   images,
                   video ? (typeof video === 'string' ? { data: video, type: 'video/mp4' } : { data: video.data, type: video.type }) : undefined,
@@ -810,6 +968,9 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                   data: { status: 'SUCCESS', duration: totalDuration },
                 });
                 console.log(`[Orchestrator Run ${runId}] Run marked SUCCESS immediately upon Gemini #3 completion.`);
+                if (workflowId) {
+                  await syncWorkflowNodesWithOutputs(workflowId, runId);
+                }
               }
             }
 
@@ -825,6 +986,9 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                 data: { status: 'SUCCESS', duration: totalDuration },
               });
               console.log(`[Orchestrator Run ${runId}] Response node completed — run marked SUCCESS immediately (${totalDuration.toFixed(1)}s).`);
+              if (workflowId) {
+                await syncWorkflowNodesWithOutputs(workflowId, runId);
+              }
             }
             // ──────────────────────────────────────────────────────────────
 
@@ -881,6 +1045,9 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
           duration: totalDuration,
         },
       });
+      if (!hasFailed && workflowId) {
+        await syncWorkflowNodesWithOutputs(workflowId, runId);
+      }
     }
   } catch (err: any) {
     console.error(`[Orchestrator Run ${runId}] Error:`, err);

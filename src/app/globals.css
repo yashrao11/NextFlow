@@ -172,3 +172,35 @@ body {
 .animate-toast-in {
   animation: toastIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* Node picker fade-in-up animation */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Ensure react-flow attribution stays visible */
+.react-flow__attribution {
+  background: transparent !important;
+  font-size: 10px !important;
+  color: #a1a1aa !important;
+}
+
+/* Make minimap match design */
+.react-flow__minimap {
+  background-color: #ffffff !important;
+  border: 1px solid #e4e4e7 !important;
+  border-radius: 0.75rem !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+  bottom: 48px !important;
+}

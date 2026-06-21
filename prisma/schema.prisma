@@ -33,6 +33,7 @@ model Run {
   status         String          // 'SUCCESS', 'FAILED', 'RUNNING', 'PARTIAL'
   duration       Float
   scope          String          // 'FULL', 'PARTIAL', 'SINGLE'
+  triggerType    String          @default("API")
   timestamp      DateTime        @default(now())
   workflow       Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   nodeExecutions NodeExecution[]

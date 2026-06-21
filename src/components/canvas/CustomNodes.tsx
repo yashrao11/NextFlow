@@ -9,6 +9,7 @@ import {
   Settings,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   Brain,
   Crop,
   FileText,
@@ -27,6 +28,8 @@ import {
   SlidersHorizontal,
   MoreHorizontal,
   X,
+  Info,
+  RotateCcw,
 } from 'lucide-react';
 
 const handleClass = "!w-3 !h-3 !bg-purple-500 !border-2 !border-white hover:scale-125 transition-transform shadow";
@@ -48,6 +51,38 @@ const getHandleClass = (colorType: 'orange' | 'teal' | 'green' | 'blue' | 'purpl
     pink: '!bg-pink-500',
   };
   return `!w-3 !h-3 ${colorMap[colorType]} !border-2 !border-white hover:scale-125 transition-transform shadow`;
+};
+
+/**
+ * Renders status badges in custom node headers.
+ */
+const getStatusBadge = (isRunning: boolean, duration?: number, error?: string) => {
+  if (isRunning) {
+    return (
+      <span className="text-[9px] bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-full font-mono font-bold animate-pulse">
+        Running
+      </span>
+    );
+  }
+  if (error) {
+    return (
+      <span className="text-[9px] bg-rose-50 text-rose-600 border border-rose-200 px-2 py-0.5 rounded-full font-mono font-bold">
+        Failed
+      </span>
+    );
+  }
+  if (duration !== undefined) {
+    return (
+      <span className="text-[9px] bg-emerald-50 text-emerald-600 border border-emerald-250 px-2 py-0.5 rounded-full font-mono font-bold">
+        Success
+      </span>
+    );
+  }
+  return (
+    <span className="text-[9px] bg-amber-50 text-amber-600 border border-amber-250 px-2 py-0.5 rounded-full font-mono font-bold">
+      Pending
+    </span>
+  );
 };
 
 /**
@@ -92,9 +127,28 @@ function MarkdownRenderer({ content }: { content: string }) {
 export function RequestInputsNode({ id, data }: NodeProps) {
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
+  const setNodes = useWorkflowStore((state) => state.setNodes);
+  const setEdges = useWorkflowStore((state) => state.setEdges);
+  const nodes = useWorkflowStore((state) => state.nodes);
+  const edges = useWorkflowStore((state) => state.edges);
   const [isAdding, setIsAdding] = useState(false);
   const [fieldName, setFieldName] = useState('');
   const [fieldType, setFieldType] = useState<'text' | 'image'>('text');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+
+  const handleDeleteNode = () => {
+    saveStateToHistory();
+    setNodes(nodes.filter((n) => n.id !== id));
+    setEdges(edges.filter((e) => e.source !== id && e.target !== id));
+  };
+
+  const handleResetNode = () => {
+    saveStateToHistory();
+    const fieldsList = data.fields || [];
+    const clearedFields = fieldsList.map((f: any) => ({ ...f, value: '' }));
+    updateNodeData(id, { fields: clearedFields });
+  };
 
   const fields = data.fields || [];
 
@@ -200,21 +254,86 @@ export function RequestInputsNode({ id, data }: NodeProps) {
 
   return (
     <div
-      className={`w-[320px] max-w-[320px] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-lg overflow-hidden p-4 text-zinc-900 transition-all duration-300 ${
-        data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300'
+      className={`w-[330px] max-w-[330px] flex flex-col bg-white border border-zinc-200/90 rounded-xl shadow-md overflow-hidden p-3.5 text-zinc-900 transition-all duration-300 cursor-default ${
+        data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300 hover:shadow-lg'
       }`}
     >
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100">
-        <div className="flex items-center gap-2">
-          <FileText className="w-4 h-4 text-purple-600" />
-          <span className="font-semibold text-xs tracking-wider uppercase text-zinc-505">
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100 relative react-flow__drag-handle cursor-grab active:cursor-grabbing">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <FileText className="w-4 h-4 text-purple-650 shrink-0" />
+          <span className="font-bold text-xs text-zinc-700 tracking-wide truncate">
             {data.label || 'Request Inputs'}
           </span>
         </div>
-        <span className="text-[9px] bg-purple-100 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-full font-mono font-semibold">
-          SYSTEM
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0 nodrag">
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              setInfoOpen(!infoOpen);
+            }} 
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0" 
+            title="Node Info"
+          >
+            <Info className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              handleResetNode();
+            }} 
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0" 
+            title="Reset Inputs"
+          >
+            <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+
+          <span className="text-[9px] bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-full font-mono font-bold select-none">
+            SYSTEM
+          </span>
+          
+          <div className="relative">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(!menuOpen);
+              }}
+              className={`p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors ${menuOpen ? 'bg-zinc-100 text-zinc-600' : ''}`}
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+            
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-7 z-50 bg-white border border-zinc-200 rounded-lg shadow-xl py-1 w-32 text-xs nodrag">
+                  <button
+                    onClick={() => {
+                      handleDeleteNode();
+                      setMenuOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-655 font-bold transition-colors cursor-pointer"
+                  >
+                    Delete Node
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
+
+      {infoOpen && (
+        <div className="mb-3.5 p-2.5 bg-zinc-50 border border-zinc-200 rounded-lg text-[10px] text-zinc-600 leading-normal relative nodrag">
+          <button 
+            onClick={() => setInfoOpen(false)}
+            className="absolute top-1.5 right-1.5 text-zinc-400 hover:text-zinc-600"
+          >
+            <X className="w-2.5 h-2.5" />
+          </button>
+          <div className="font-semibold text-zinc-800 mb-0.5">About Request Inputs</div>
+          Configure parameters (text values or images) to trigger workflow execution paths. Connect these outputs to other nodes in the workspace.
+        </div>
+      )}
 
       <div className="space-y-4">
         {fields.length === 0 ? (
@@ -411,6 +530,28 @@ export function CropImageNode({ id, data }: NodeProps) {
   const edges = useWorkflowStore((state) => state.edges);
   const nodes = useWorkflowStore((state) => state.nodes);
   const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
+  const setNodes = useWorkflowStore((state) => state.setNodes);
+  const setEdges = useWorkflowStore((state) => state.setEdges);
+  const showNotification = useWorkflowStore((state) => state.showNotification);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+
+  const handleDeleteNode = () => {
+    saveStateToHistory();
+    setNodes(nodes.filter((n) => n.id !== id));
+    setEdges(edges.filter((e) => e.source !== id && e.target !== id));
+  };
+
+  const handleResetNode = () => {
+    saveStateToHistory();
+    updateNodeData(id, {
+      crop: { x: 0, y: 0, width: 100, height: 100 },
+      imageUrl: '',
+      output: {},
+      duration: undefined,
+      error: undefined,
+    });
+  };
 
   const isImageConnected = edges.some(
     (edge) => edge.target === id && edge.targetHandle === 'image-input'
@@ -431,8 +572,7 @@ export function CropImageNode({ id, data }: NodeProps) {
       if (parentNode) {
         if (parentNode.type === 'requestInputs') {
           const fields = parentNode.data.fields || [];
-          const fieldId = edge.sourceHandle?.split('-')[0] || '';
-          const imgField = fields.find((f: any) => f.id.startsWith(fieldId) && f.type === 'image');
+          const imgField = fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id) && f.type === 'image');
           if (imgField?.value) {
             resolvedInputImage = imgField.value;
           }
@@ -456,8 +596,7 @@ export function CropImageNode({ id, data }: NodeProps) {
       valStr = parentNode.data.output?.result || parentNode.data.result || '';
     } else if (parentNode.type === 'requestInputs') {
       const fields = parentNode.data.fields || [];
-      const fieldId = edge.sourceHandle?.split('-')[0] || '';
-      const textVal = fields.find((f: any) => f.id.startsWith(fieldId) && f.type === 'text');
+      const textVal = fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id) && f.type === 'text');
       valStr = textVal?.value || '';
     }
     
@@ -490,7 +629,7 @@ export function CropImageNode({ id, data }: NodeProps) {
     const displayVal = isConnected ? getConnectedValue(handleId, crop[field]) : crop[field];
 
     return (
-      <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2.5 gap-2">
+      <div className="relative flex items-center justify-between gap-2.5 w-full py-1">
         <Handle
           type="target"
           position={Position.Left}
@@ -500,7 +639,17 @@ export function CropImageNode({ id, data }: NodeProps) {
         />
         
         <div className="flex items-center gap-1 select-none w-28 truncate">
-          <span className="text-[10px] font-semibold text-zinc-605">{label}</span>
+          <span className="text-[10px] font-bold text-zinc-700">{label}</span>
+          <button 
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              showNotification(`Sets the ${label} parameter for image cropping.`, 'warning');
+            }}
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0 nodrag"
+          >
+            <Info className="w-3 h-3 inline" strokeWidth={1.5} />
+          </button>
         </div>
 
         <input
@@ -524,13 +673,35 @@ export function CropImageNode({ id, data }: NodeProps) {
           disabled={isConnected}
           onChange={(e) => handleValChange(field, parseInt(e.target.value) || 0)}
           onFocus={saveStateToHistory}
-          className={`w-9 text-center text-[10px] bg-white border border-zinc-200 rounded px-0.5 py-0.5 text-zinc-850 font-semibold focus:outline-none focus:border-purple-500 font-mono nodrag ${
+          className={`w-9 text-center text-[10px] bg-[#f1f3f4] border border-[#dadce0] rounded-lg py-0.5 text-zinc-800 font-bold focus:outline-none focus:bg-white focus:border-purple-500 font-mono nodrag ${
             isConnected ? 'opacity-40 bg-zinc-100 cursor-not-allowed' : ''
           }`}
         />
 
-        <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
-          <Plus className="w-3 h-3" />
+        <button 
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleValChange(field, field === 'width' || field === 'height' ? 100 : 0);
+          }}
+          disabled={isConnected}
+          className="flex items-center justify-center w-7 h-7 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-zinc-500 hover:text-zinc-850 transition-colors nodrag disabled:opacity-30 shrink-0 text-xs font-bold"
+          title="Reset parameter"
+        >
+          <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
+        </button>
+
+        <button 
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleValChange(field, crop[field] + 5);
+          }}
+          disabled={isConnected}
+          className="flex items-center justify-center w-7 h-7 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-zinc-500 hover:text-zinc-850 transition-colors nodrag shrink-0 disabled:opacity-30"
+          title="Increment parameter"
+        >
+          <Plus className="w-3.5 h-3.5" />
         </button>
       </div>
     );
@@ -538,48 +709,113 @@ export function CropImageNode({ id, data }: NodeProps) {
 
   return (
     <div
-      className={`w-[320px] max-w-[320px] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-lg overflow-hidden p-4 text-zinc-900 transition-all duration-300 ${
-        data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300'
+      className={`w-[330px] max-w-[330px] flex flex-col bg-white border border-zinc-200/90 rounded-xl shadow-md overflow-hidden p-3.5 text-zinc-900 transition-all duration-300 cursor-default ${
+        data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300 hover:shadow-lg'
       }`}
     >
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100">
-        <div className="flex items-center gap-2">
-          <Crop className="w-4 h-4 text-blue-500" />
-          <span className="font-semibold text-xs text-zinc-700">
-            {data.label || 'Crop Image'}
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100 relative react-flow__drag-handle cursor-grab active:cursor-grabbing">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Crop className="w-4 h-4 text-blue-500 shrink-0" />
+          <span className="font-bold text-xs text-zinc-700 tracking-wide truncate">
+            Crop Image
           </span>
         </div>
         
-        <div className="flex items-center gap-1.5">
-          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors">
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleTriggerLocalRun}
-            disabled={data.isRunning}
-            className={`px-2.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition-all shadow-sm ${
-              data.isRunning 
-                ? 'bg-emerald-100 text-emerald-700 animate-pulse'
-                : 'bg-emerald-500 hover:bg-emerald-600 text-white'
-            }`}
-            title="Run from this node"
+        <div className="flex items-center gap-1.5 shrink-0 nodrag">
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              setInfoOpen(!infoOpen);
+            }} 
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0" 
+            title="Node Info"
           >
-            {data.isRunning ? (
-              <Loader2 className="w-3 h-3 animate-spin" />
-            ) : (
-              <Play className="w-2.5 h-2.5 fill-current" />
+            <Info className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              handleResetNode();
+            }} 
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0" 
+            title="Reset Node Inputs"
+          >
+            <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+
+          {data.isRunning ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                window.dispatchEvent(new CustomEvent('run-node', { detail: { nodeId: null } }));
+              }}
+              className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 bg-red-100 hover:bg-red-200 text-red-750 transition-all animate-pulse"
+              title="Stop Run"
+            >
+              <X className="w-2.5 h-2.5 text-red-650" />
+              <span>Stop</span>
+            </button>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleTriggerLocalRun();
+              }}
+              className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-850 transition-all"
+              title="Run from this node"
+            >
+              <Play className="w-2 h-2 fill-current text-emerald-700" />
+              <span>Run</span>
+            </button>
+          )}
+
+          <div className="relative">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(!menuOpen);
+              }}
+              className={`p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-655 transition-colors ${menuOpen ? 'bg-zinc-100 text-zinc-600' : ''}`}
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+            
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-7 z-50 bg-white border border-zinc-200 rounded-lg shadow-xl py-1 w-32 text-xs nodrag">
+                  <button
+                    onClick={() => {
+                      handleDeleteNode();
+                      setMenuOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 font-bold transition-colors cursor-pointer"
+                  >
+                    Delete Node
+                  </button>
+                </div>
+              </>
             )}
-            <span>Run</span>
-          </button>
-          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors">
-            <MoreHorizontal className="w-3.5 h-3.5" />
-          </button>
+          </div>
         </div>
       </div>
 
+      {infoOpen && (
+        <div className="mb-3.5 p-2.5 bg-zinc-50 border border-zinc-200 rounded-lg text-[10px] text-zinc-600 leading-normal relative nodrag">
+          <button 
+            onClick={() => setInfoOpen(false)}
+            className="absolute top-1.5 right-1.5 text-zinc-400 hover:text-zinc-600"
+          >
+            <X className="w-2.5 h-2.5" />
+          </button>
+          <div className="font-semibold text-zinc-800 mb-0.5">About Crop Image</div>
+          Crops an input image using X/Y coordinates, width, and height. Can receive dynamic inputs for percentage values.
+        </div>
+      )}
+
       <div className="space-y-3">
         {/* Input Image URL Field overrides when connected */}
-        <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+        <div className="relative flex items-center justify-between gap-2.5 py-1 w-full">
           <Handle
             type="target"
             position={Position.Left}
@@ -587,25 +823,29 @@ export function CropImageNode({ id, data }: NodeProps) {
             className={getHandleClass('teal')}
             style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
           />
-          <div className="flex items-center gap-1 select-none">
-            <span className="text-[10px] font-semibold text-zinc-600">Input Image</span>
+          <div className="flex items-center gap-1 select-none shrink-0 w-24">
+            <span className="text-[10px] font-bold text-zinc-700">Input Image</span>
             <span className="text-red-500 text-[10px] font-bold">*</span>
           </div>
           
-          <button
-            type="button"
-            disabled={isImageConnected}
-            onClick={() => {
-              const el = document.getElementById(`crop-image-upload-${id}`);
-              if (el) el.click();
-            }}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 rounded text-[10px] font-semibold text-zinc-650 transition-colors nodrag ${
-              isImageConnected ? 'opacity-40 cursor-not-allowed bg-zinc-100' : 'hover:bg-zinc-50'
-            }`}
-          >
-            <ImageIcon className="w-3 h-3 text-zinc-400" />
-            <span>{isImageConnected ? 'Connected' : 'Upload image'}</span>
-          </button>
+          {isImageConnected ? (
+            <div className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-zinc-100 border border-[#dadce0] rounded-lg text-[10px] font-bold text-zinc-500 select-none nodrag">
+              <ImageIcon className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Connected</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById(`crop-image-upload-${id}`);
+                if (el) el.click();
+              }}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-[10px] font-bold text-zinc-705 transition-colors cursor-pointer nodrag"
+            >
+              <ImageIcon className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Upload image</span>
+            </button>
+          )}
           <input
             id={`crop-image-upload-${id}`}
             type="file"
@@ -623,10 +863,6 @@ export function CropImageNode({ id, data }: NodeProps) {
             }}
             className="hidden"
           />
-          
-          <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors">
-            <Plus className="w-3 h-3" />
-          </button>
         </div>
 
         {/* Visual Crop selection overlay inside bounding box */}
@@ -661,9 +897,9 @@ export function CropImageNode({ id, data }: NodeProps) {
         {/* Output Image Box section */}
         <div className="border-t border-zinc-100 pt-3 space-y-1.5 relative">
           <div className="flex items-center gap-1 select-none pl-1">
-            <span className="text-[10px] text-zinc-605 font-semibold">Output Image</span>
+            <span className="text-[10px] text-zinc-700 font-bold">Output Image</span>
           </div>
-          <div className="w-full min-h-[48px] bg-zinc-50 border border-zinc-200 border-dashed rounded-lg p-2.5 flex items-center justify-center overflow-hidden nodrag nowheel select-none">
+          <div className="w-full min-h-[100px] bg-[#f8f9fa] border border-[#dadce0] rounded-xl p-3 flex items-center justify-center overflow-hidden nodrag nowheel select-none">
             {data.output?.imageUrl ? (
               <img
                 src={data.output.imageUrl}
@@ -672,8 +908,15 @@ export function CropImageNode({ id, data }: NodeProps) {
                 className="max-w-full h-auto object-contain rounded"
               />
             ) : (
-              <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
+              <span className="text-[11px] text-zinc-400 font-semibold italic">No output yet</span>
             )}
+          </div>
+          
+          <div className="flex justify-end pt-1">
+            <div className="flex items-center gap-1 text-[9px] text-zinc-400 font-bold select-none">
+              <span>🔗</span>
+              <span>~0.005M</span>
+            </div>
           </div>
           
           <Handle
@@ -702,7 +945,33 @@ export function GeminiNode({ id, data }: NodeProps) {
   const nodes = useWorkflowStore((state) => state.nodes);
   const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
   const showNotification = useWorkflowStore((state) => state.showNotification);
+  const setNodes = useWorkflowStore((state) => state.setNodes);
+  const setEdges = useWorkflowStore((state) => state.setEdges);
   const [showSettings, setShowSettings] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+
+  const handleDeleteNode = () => {
+    saveStateToHistory();
+    setNodes(nodes.filter((n) => n.id !== id));
+    setEdges(edges.filter((e) => e.source !== id && e.target !== id));
+  };
+
+  const handleResetNode = () => {
+    saveStateToHistory();
+    updateNodeData(id, {
+      prompt: '',
+      systemPrompt: '',
+      response: '',
+      output: {},
+      uploadedImages: [],
+      uploadedVideo: null,
+      uploadedAudio: null,
+      uploadedFile: null,
+      duration: undefined,
+      error: undefined,
+    });
+  };
 
   const model = data.model || 'Gemini 3.1 Pro';
   const temperature = data.temperature ?? 0.7;
@@ -741,7 +1010,7 @@ export function GeminiNode({ id, data }: NodeProps) {
     window.dispatchEvent(event);
   };
 
-  const getConnectedImages = () => {
+  const getConnectedImages = (): { url: string; cropWidth?: number }[] => {
     const incomingEdges = edges.filter(
       (e) => e.target === id && e.targetHandle === 'image-input'
     );
@@ -752,16 +1021,13 @@ export function GeminiNode({ id, data }: NodeProps) {
       
       if (parentNode.type === 'cropImage') {
         const img = parentNode.data.output?.imageUrl || parentNode.data.imageUrl;
+        const cropWidth = parentNode.data.crop?.width;
         if (img) {
-          images.push({
-            url: img,
-            cropWidth: parentNode.data.crop?.width,
-          });
+          images.push({ url: img, cropWidth });
         }
       } else if (parentNode.type === 'requestInputs') {
         const fields = parentNode.data.fields || [];
-        const fieldId = edge.sourceHandle?.split('-')[0] || '';
-        const imgField = fields.find((f: any) => f.id.startsWith(fieldId) && f.type === 'image');
+        const imgField = fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id) && f.type === 'image');
         if (imgField?.value) {
           images.push({ url: imgField.value });
         }
@@ -829,50 +1095,126 @@ export function GeminiNode({ id, data }: NodeProps) {
     e.target.value = '';
   };
 
+  const handleSystemPromptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    saveStateToHistory();
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      updateNodeData(id, { systemPrompt: reader.result as string });
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   return (
     <div
-      className={`w-[320px] max-w-[320px] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-lg overflow-hidden p-4 text-zinc-900 transition-all duration-300 ${
-        data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300'
+      className={`w-[330px] max-w-[330px] flex flex-col bg-white border border-[#dadce0] rounded-2xl shadow-[0_4px_20px_rgba(0,0,0,0.06)] overflow-hidden p-4 text-zinc-900 transition-all duration-300 cursor-default ${
+        data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300 hover:shadow-xl'
       }`}
     >
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100">
-        <div className="flex items-center gap-2">
-          <Brain className="w-4 h-4 text-purple-600" />
-          <span className="font-semibold text-xs text-zinc-700">
-            {data.label || 'Gemini 3.1 Pro'}
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100 relative react-flow__drag-handle cursor-grab active:cursor-grabbing">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="font-bold text-[13px] text-zinc-800 tracking-wide truncate">
+            Gemini 3.1 Pro
           </span>
         </div>
         
-        <div className="flex items-center gap-1.5">
-          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors font-semibold">
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleTriggerLocalRun}
-            disabled={data.isRunning}
-            className={`px-2.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition-all shadow-sm ${
-              data.isRunning 
-                ? 'bg-emerald-100 text-emerald-700 animate-pulse'
-                : 'bg-emerald-500 hover:bg-emerald-600 text-white'
-            }`}
-            title="Run from this node"
+        <div className="flex items-center gap-1.5 shrink-0 nodrag">
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              setInfoOpen(!infoOpen);
+            }} 
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0" 
+            title="Node Info"
           >
-            {data.isRunning ? (
-              <Loader2 className="w-3 h-3 animate-spin" />
-            ) : (
-              <Play className="w-2.5 h-2.5 fill-current" />
+            <Info className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              handleResetNode();
+            }} 
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0" 
+            title="Reset Inputs"
+          >
+            <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+
+          {data.isRunning ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                window.dispatchEvent(new CustomEvent('run-node', { detail: { nodeId: null } }));
+              }}
+              className="px-3 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1.5 bg-red-100 hover:bg-red-200 text-red-750 transition-colors animate-pulse shrink-0"
+              title="Stop Run"
+            >
+              <X className="w-2.5 h-2.5 text-red-650" />
+              <span>Stop</span>
+            </button>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleTriggerLocalRun();
+              }}
+              className="px-3 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1.5 bg-[#e6f4ea] hover:bg-[#d2ebd9] text-[#137333] transition-colors shrink-0"
+              title="Run from this node"
+            >
+              <Play className="w-2.5 h-2.5 fill-current text-[#137333]" />
+              <span>Run</span>
+            </button>
+          )}
+
+          <div className="relative">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(!menuOpen);
+              }}
+              className={`w-7 h-7 flex items-center justify-center bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-zinc-500 transition-colors shrink-0 ${menuOpen ? 'bg-[#f1f3f4]' : ''}`}
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+            
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-7 z-50 bg-white border border-zinc-200 rounded-lg shadow-xl py-1 w-32 text-xs nodrag">
+                  <button
+                    onClick={() => {
+                      handleDeleteNode();
+                      setMenuOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 font-bold transition-colors cursor-pointer"
+                  >
+                    Delete Node
+                  </button>
+                </div>
+              </>
             )}
-            <span>Run</span>
-          </button>
-          <button className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-650 transition-colors">
-            <MoreHorizontal className="w-3.5 h-3.5" />
-          </button>
+          </div>
         </div>
       </div>
 
+      {infoOpen && (
+        <div className="mb-3.5 p-2.5 bg-zinc-50 border border-zinc-200 rounded-lg text-[10px] text-zinc-600 leading-normal relative nodrag">
+          <button 
+            onClick={() => setInfoOpen(false)}
+            className="absolute top-1.5 right-1.5 text-zinc-400 hover:text-zinc-600"
+          >
+            <X className="w-2.5 h-2.5" />
+          </button>
+          <div className="font-semibold text-zinc-800 mb-0.5">About Gemini</div>
+          Runs a prompt with the Google Gemini AI model. Supports system instructions, Vision input, and media files.
+        </div>
+      )}
+
       <div className="space-y-4">
         {/* Core Prompt Inputs */}
-        <div className="space-y-3">
+        <div className="space-y-3.5">
           {/* Prompt (Required) Input row */}
           <div className="relative space-y-1.5 pl-1">
             <Handle
@@ -882,22 +1224,36 @@ export function GeminiNode({ id, data }: NodeProps) {
               className={getHandleClass('orange')}
               style={{ left: '-22px', top: '10px' }}
             />
-            <div className="flex items-center gap-1 select-none">
-              <span className="text-[10px] text-zinc-600 font-semibold uppercase tracking-wider">
-                Prompt
+            <div className="flex items-center gap-1 select-none font-semibold text-[11px] text-zinc-550">
+              <span>Prompt</span>
+              <span className="text-red-500 font-bold -ml-0.5">*</span>
+              <span 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  showNotification('Enter a text prompt to run the model. Can connect inputs dynamically.', 'warning');
+                }}
+                className="text-zinc-400 hover:text-zinc-600 cursor-pointer"
+              >
+                <Info className="w-3.5 h-3.5 inline" strokeWidth={1.5} />
               </span>
-              <span className="text-red-500 text-[10px] font-bold">*</span>
             </div>
-            <textarea
-              value={isPromptConnected ? '(Connected to flow input)' : prompt}
-              onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
-              onFocus={saveStateToHistory}
-              placeholder="Enter your prompt..."
-              disabled={isPromptConnected}
-              className={`w-full text-xs bg-zinc-50 border border-zinc-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-purple-500 resize-y text-zinc-900 min-h-[50px] nodrag nowheel ${
-                isPromptConnected ? 'opacity-50 bg-zinc-100 cursor-not-allowed font-medium' : ''
-              }`}
-            />
+            <div className="relative w-full">
+              <textarea
+                value={isPromptConnected ? '(Connected to flow input)' : prompt}
+                onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
+                onFocus={saveStateToHistory}
+                placeholder="Enter your prompt..."
+                disabled={isPromptConnected}
+                className={`w-full text-xs bg-[#f8f9fa] border border-[#dadce0] rounded-xl px-3 py-2.5 focus:outline-none focus:border-purple-500 focus:bg-white resize-y text-zinc-800 min-h-[60px] nodrag nowheel transition-all ${
+                  isPromptConnected ? 'opacity-50 bg-zinc-100 cursor-not-allowed font-medium' : ''
+                }`}
+              />
+              <div className="absolute bottom-1.5 right-1.5 pointer-events-none text-zinc-400">
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 8L16 16M8 12V8H12M12 16H16V12" />
+                </svg>
+              </div>
+            </div>
           </div>
 
           {/* System Prompt Input row */}
@@ -910,115 +1266,170 @@ export function GeminiNode({ id, data }: NodeProps) {
               style={{ left: '-22px', top: '10px' }}
             />
             <div className="flex items-center justify-between select-none">
-              <div className="flex items-center gap-1 font-semibold">
-                <span className="text-[10px] text-zinc-655 tracking-wider">
-                  System Prompt
+              <div className="flex items-center gap-1 font-semibold text-[11px] text-zinc-550">
+                <span>System Prompt</span>
+                <span 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    showNotification('Define system instructions to set behavior of the AI agent.', 'warning');
+                  }}
+                  className="text-zinc-400 hover:text-zinc-600 cursor-pointer"
+                >
+                  <Info className="w-3.5 h-3.5 inline" strokeWidth={1.5} />
                 </span>
               </div>
-              <button className="p-0.5 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors font-semibold">
-                <Plus className="w-3 h-3" />
+              <button 
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById(`system-prompt-upload-${id}`);
+                  if (el) el.click();
+                }}
+                disabled={isSystemPromptConnected}
+                className="w-7 h-7 flex items-center justify-center bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-zinc-500 hover:text-zinc-700 transition-colors font-semibold nodrag disabled:opacity-30"
+              >
+                <Plus className="w-3.5 h-3.5" />
               </button>
+              <input
+                id={`system-prompt-upload-${id}`}
+                type="file"
+                accept=".txt,.md,.json,text/*"
+                onChange={handleSystemPromptUpload}
+                className="hidden"
+              />
             </div>
-            <textarea
-              value={isSystemPromptConnected ? '(Connected to flow input)' : systemPrompt}
-              onChange={(e) => updateNodeData(id, { systemPrompt: e.target.value })}
-              onFocus={saveStateToHistory}
-              placeholder="You are a helpful coding assistant..."
-              disabled={isSystemPromptConnected}
-              className={`w-full text-xs bg-zinc-50 border border-zinc-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-purple-500 resize-y text-zinc-900 min-h-[40px] nodrag nowheel ${
-                isSystemPromptConnected ? 'opacity-50 bg-zinc-100 cursor-not-allowed font-medium' : ''
-              }`}
-            />
+            <div className="relative w-full">
+              <textarea
+                value={isSystemPromptConnected ? '(Connected to flow input)' : systemPrompt}
+                onChange={(e) => updateNodeData(id, { systemPrompt: e.target.value })}
+                onFocus={saveStateToHistory}
+                placeholder="You are a helpful coding assistant..."
+                disabled={isSystemPromptConnected}
+                className={`w-full text-xs bg-[#f8f9fa] border border-[#dadce0] rounded-xl px-3 py-2.5 focus:outline-none focus:border-purple-500 focus:bg-white resize-y text-zinc-800 min-h-[50px] nodrag nowheel transition-all ${
+                  isSystemPromptConnected ? 'opacity-50 bg-zinc-100 cursor-not-allowed font-medium' : ''
+                }`}
+              />
+              <div className="absolute bottom-1.5 right-1.5 pointer-events-none text-zinc-400">
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 8L16 16M8 12V8H12M12 16H16V12" />
+                </svg>
+              </div>
+            </div>
           </div>
 
           {/* Image (Vision) Input row */}
-          <div className="relative flex flex-col bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+          <div className="relative flex items-center justify-between gap-2 py-1 w-full pl-1">
             <Handle
               type="target"
               position={Position.Left}
               id="image-input"
               className={getHandleClass('teal')}
-              style={{ left: '-22px', top: '16px' }}
+              style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
             />
-            <div className="flex items-center justify-between w-full">
-              <div className="flex items-center gap-1 select-none">
-                <span className="text-[10px] font-semibold text-zinc-600">Image (Vision)</span>
-              </div>
-              
-              <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors font-semibold">
-                <Plus className="w-3 h-3" />
-              </button>
+            <div className="flex items-center select-none shrink-0 pr-2">
+              <span className="text-[11px] font-semibold text-zinc-555">Image (Vision)</span>
             </div>
-
+            
             {isImageConnected ? (
-              <div className="flex flex-col items-center gap-2.5 mt-1 select-none nodrag w-full">
-                {getConnectedImages().map((imgObj, idx) => (
-                  <img
-                    key={idx}
-                    src={imgObj.url}
-                    alt={`Cropped input ${idx + 1}`}
-                    style={{
-                      width: imgObj.cropWidth ? `${imgObj.cropWidth}%` : undefined,
-                    }}
-                    className="max-w-full max-h-48 object-contain rounded-lg border border-zinc-200 bg-zinc-50 nodrag"
-                  />
-                ))}
-                {getConnectedImages().length === 0 && (
-                  <span className="text-[10px] text-zinc-400 italic">Connected (waiting for output)</span>
-                )}
+              <div className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-zinc-100 border border-[#dadce0] rounded-lg text-[10px] font-semibold text-zinc-500 select-none nodrag">
+                <span>Connected</span>
               </div>
-            ) : (
-              <div className="space-y-2 w-full nodrag">
-                {uploadedImages.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mt-1 select-none">
-                    {uploadedImages.map((imgUrl: string, idx: number) => (
-                      <div key={idx} className="relative group h-16 w-auto max-w-full shrink-0">
-                        <img
-                          src={imgUrl}
-                          alt={`Manual upload ${idx + 1}`}
-                          className="h-full w-auto border border-zinc-200 rounded bg-white shadow-sm object-contain"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            saveStateToHistory();
-                            updateNodeData(id, {
-                              uploadedImages: uploadedImages.filter((_: string, i: number) => i !== idx)
-                            });
-                          }}
-                          className="absolute inset-0 bg-black/60 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer rounded"
-                        >
-                          <X className="w-3.5 h-3.5 text-white" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+            ) : uploadedImages.length > 0 ? (
+              <div className="flex-1 flex items-center justify-between gap-1.5 py-1.5 px-3 bg-white border border-[#dadce0] rounded-lg text-[10px] font-medium text-zinc-700 nodrag">
+                <span className="truncate">{uploadedImages.length} Image(s)</span>
                 <button
                   type="button"
                   onClick={() => {
-                    const el = document.getElementById(`image-upload-${id}`);
-                    if (el) el.click();
+                    saveStateToHistory();
+                    updateNodeData(id, { uploadedImages: [] });
                   }}
-                  className="w-full flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 hover:border-zinc-300 rounded text-[10px] font-semibold text-zinc-650 hover:bg-zinc-50 transition-colors cursor-pointer"
+                  className="text-red-500 hover:text-red-750 font-bold ml-1"
                 >
-                  <ImageIcon className="w-3 h-3 text-zinc-400" />
-                  <span>Upload image</span>
+                  ✕
                 </button>
-                <input
-                  id={`image-upload-${id}`}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={handleImageUpload}
-                  className="hidden"
-                />
               </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById(`image-upload-${id}`);
+                  if (el) el.click();
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-[10px] font-medium text-zinc-650 transition-colors cursor-pointer nodrag"
+              >
+                <Upload className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Upload image</span>
+              </button>
             )}
+            
+            <input
+              id={`image-upload-${id}`}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleImageUpload}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById(`image-upload-${id}`);
+                if (el) el.click();
+              }}
+              disabled={isImageConnected}
+              className="flex items-center justify-center w-7 h-7 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-zinc-500 hover:text-zinc-700 transition-colors font-semibold shrink-0 nodrag"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
           </div>
 
+          {/* Connected images display section */}
+          {isImageConnected && (
+            <div className="flex flex-col items-center gap-2.5 mt-1 select-none nodrag w-full">
+              {getConnectedImages().map((imgObj, idx) => (
+                <img
+                  key={idx}
+                  src={imgObj.url}
+                  alt={`Cropped input ${idx + 1}`}
+                  style={{
+                    width: imgObj.cropWidth ? `${imgObj.cropWidth}%` : undefined,
+                  }}
+                  className="max-w-full max-h-48 object-contain rounded-lg border border-zinc-200 bg-zinc-50 nodrag"
+                />
+              ))}
+              {getConnectedImages().length === 0 && (
+                <span className="text-[10px] text-zinc-400 italic">Connected (waiting for output)</span>
+              )}
+            </div>
+          )}
+
+          {!isImageConnected && uploadedImages.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-1 select-none nodrag">
+              {uploadedImages.map((imgUrl: string, idx: number) => (
+                <div key={idx} className="relative group h-16 w-auto max-w-full shrink-0">
+                  <img
+                    src={imgUrl}
+                    alt={`Manual upload ${idx + 1}`}
+                    className="h-full w-auto border border-zinc-200 rounded bg-white shadow-sm object-contain"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      saveStateToHistory();
+                      updateNodeData(id, {
+                        uploadedImages: uploadedImages.filter((_: string, i: number) => i !== idx)
+                      });
+                    }}
+                    className="absolute inset-0 bg-black/60 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer rounded"
+                  >
+                    <X className="w-3.5 h-3.5 text-white" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Video Input row */}
-          <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+          <div className="relative flex items-center justify-between gap-2 py-1 w-full pl-1">
             <Handle
               type="target"
               position={Position.Left}
@@ -1026,31 +1437,27 @@ export function GeminiNode({ id, data }: NodeProps) {
               className={getHandleClass('green')}
               style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
             />
-            <div className="flex items-center gap-1 select-none shrink-0 w-[80px]">
-              <span className="text-[10px] font-semibold text-zinc-600">Video</span>
+            <div className="flex items-center select-none shrink-0 pr-2">
+              <span className="text-[11px] font-semibold text-zinc-555">Video</span>
             </div>
             
             {isVideoConnected ? (
-              <div className="flex-1 text-[10px] text-zinc-450 italic pl-2 nodrag">Connected</div>
+              <div className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-zinc-100 border border-[#dadce0] rounded-lg text-[10px] font-semibold text-zinc-500 select-none nodrag">
+                <span>Connected</span>
+              </div>
             ) : uploadedVideo ? (
-              <div className="flex-1 flex items-center justify-between bg-white border border-zinc-200 rounded px-2.5 py-1 text-[10px] text-zinc-700 font-medium nodrag truncate">
-                <div className="flex items-center gap-1.5 truncate max-w-[130px]">
-                  <VideoIcon className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                  <span className="truncate" title={uploadedVideo.name}>{uploadedVideo.name}</span>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-zinc-400 text-[9px]">({(uploadedVideo.size / (1024 * 1024)).toFixed(2)}MB)</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      saveStateToHistory();
-                      updateNodeData(id, { uploadedVideo: null });
-                    }}
-                    className="p-0.5 hover:bg-zinc-100 rounded text-zinc-400 hover:text-red-500 transition-colors"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+              <div className="flex-1 flex items-center justify-between gap-1.5 py-1.5 px-3 bg-white border border-[#dadce0] rounded-lg text-[10px] font-medium text-zinc-700 nodrag">
+                <span className="truncate" title={uploadedVideo.name}>{uploadedVideo.name}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveStateToHistory();
+                    updateNodeData(id, { uploadedVideo: null });
+                  }}
+                  className="text-red-500 hover:text-red-700 font-bold ml-1 shrink-0"
+                >
+                  ✕
+                </button>
               </div>
             ) : (
               <button
@@ -1059,9 +1466,9 @@ export function GeminiNode({ id, data }: NodeProps) {
                   const el = document.getElementById(`video-upload-${id}`);
                   if (el) el.click();
                 }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 hover:border-zinc-300 rounded text-[10px] font-semibold text-zinc-655 hover:bg-zinc-50 transition-colors cursor-pointer nodrag"
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-[10px] font-medium text-zinc-600 transition-colors cursor-pointer nodrag"
               >
-                <VideoIcon className="w-3 h-3 text-zinc-400" />
+                <Upload className="w-3.5 h-3.5 text-zinc-400" />
                 <span>Upload video</span>
               </button>
             )}
@@ -1072,14 +1479,21 @@ export function GeminiNode({ id, data }: NodeProps) {
               onChange={(e) => handleSingleFileUpload(e, 'uploadedVideo')}
               className="hidden"
             />
-            
-            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors shrink-0 font-semibold">
-              <Plus className="w-3 h-3" />
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById(`video-upload-${id}`);
+                if (el) el.click();
+              }}
+              disabled={isVideoConnected}
+              className="flex items-center justify-center w-7 h-7 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-zinc-500 hover:text-zinc-700 transition-colors font-semibold shrink-0 nodrag"
+            >
+              <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
 
           {/* Audio Input row */}
-          <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+          <div className="relative flex items-center justify-between gap-2 py-1 w-full pl-1">
             <Handle
               type="target"
               position={Position.Left}
@@ -1087,31 +1501,27 @@ export function GeminiNode({ id, data }: NodeProps) {
               className={getHandleClass('blue')}
               style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
             />
-            <div className="flex items-center gap-1 select-none shrink-0 w-[80px]">
-              <span className="text-[10px] font-semibold text-zinc-600">Audio</span>
+            <div className="flex items-center select-none shrink-0 pr-2">
+              <span className="text-[11px] font-semibold text-zinc-555">Audio</span>
             </div>
             
             {isAudioConnected ? (
-              <div className="flex-1 text-[10px] text-zinc-450 italic pl-2 nodrag">Connected</div>
+              <div className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-zinc-100 border border-[#dadce0] rounded-lg text-[10px] font-semibold text-zinc-500 select-none nodrag">
+                <span>Connected</span>
+              </div>
             ) : uploadedAudio ? (
-              <div className="flex-1 flex items-center justify-between bg-white border border-zinc-200 rounded px-2.5 py-1 text-[10px] text-zinc-700 font-medium nodrag truncate">
-                <div className="flex items-center gap-1.5 truncate max-w-[130px]">
-                  <AudioIcon className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                  <span className="truncate" title={uploadedAudio.name}>{uploadedAudio.name}</span>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-zinc-400 text-[9px]">({(uploadedAudio.size / (1024 * 1024)).toFixed(2)}MB)</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      saveStateToHistory();
-                      updateNodeData(id, { uploadedAudio: null });
-                    }}
-                    className="p-0.5 hover:bg-zinc-100 rounded text-zinc-400 hover:text-red-500 transition-colors"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+              <div className="flex-1 flex items-center justify-between gap-1.5 py-1.5 px-3 bg-white border border-[#dadce0] rounded-lg text-[10px] font-medium text-zinc-700 nodrag">
+                <span className="truncate" title={uploadedAudio.name}>{uploadedAudio.name}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveStateToHistory();
+                    updateNodeData(id, { uploadedAudio: null });
+                  }}
+                  className="text-red-500 hover:text-red-700 font-bold ml-1 shrink-0"
+                >
+                  ✕
+                </button>
               </div>
             ) : (
               <button
@@ -1120,9 +1530,9 @@ export function GeminiNode({ id, data }: NodeProps) {
                   const el = document.getElementById(`audio-upload-${id}`);
                   if (el) el.click();
                 }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 hover:border-zinc-300 rounded text-[10px] font-semibold text-zinc-655 hover:bg-zinc-50 transition-colors cursor-pointer nodrag"
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-[10px] font-medium text-zinc-600 transition-colors cursor-pointer nodrag"
               >
-                <AudioIcon className="w-3 h-3 text-zinc-400" />
+                <Upload className="w-3.5 h-3.5 text-zinc-400" />
                 <span>Upload audio</span>
               </button>
             )}
@@ -1133,14 +1543,21 @@ export function GeminiNode({ id, data }: NodeProps) {
               onChange={(e) => handleSingleFileUpload(e, 'uploadedAudio')}
               className="hidden"
             />
-            
-            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors shrink-0 font-semibold">
-              <Plus className="w-3 h-3" />
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById(`audio-upload-${id}`);
+                if (el) el.click();
+              }}
+              disabled={isAudioConnected}
+              className="flex items-center justify-center w-7 h-7 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-zinc-500 hover:text-zinc-700 transition-colors font-semibold shrink-0 nodrag"
+            >
+              <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
 
           {/* File Input row */}
-          <div className="relative flex items-center justify-between bg-zinc-50 border border-zinc-150 rounded-lg p-2 gap-2">
+          <div className="relative flex items-center justify-between gap-2 py-1 w-full pl-1">
             <Handle
               type="target"
               position={Position.Left}
@@ -1148,31 +1565,27 @@ export function GeminiNode({ id, data }: NodeProps) {
               className={getHandleClass('purple')}
               style={{ left: '-22px', top: '50%', transform: 'translateY(-50%)' }}
             />
-            <div className="flex items-center gap-1 select-none shrink-0 w-[80px]">
-              <span className="text-[10px] font-semibold text-zinc-600">File</span>
+            <div className="flex items-center select-none shrink-0 pr-2">
+              <span className="text-[11px] font-semibold text-zinc-555">File</span>
             </div>
             
             {isFileConnected ? (
-              <div className="flex-1 text-[10px] text-zinc-450 italic pl-2 nodrag">Connected</div>
+              <div className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-zinc-100 border border-[#dadce0] rounded-lg text-[10px] font-semibold text-zinc-500 select-none nodrag">
+                <span>Connected</span>
+              </div>
             ) : uploadedFile ? (
-              <div className="flex-1 flex items-center justify-between bg-white border border-zinc-200 rounded px-2.5 py-1 text-[10px] text-zinc-700 font-medium nodrag truncate">
-                <div className="flex items-center gap-1.5 truncate max-w-[130px]">
-                  <FileIcon className="w-3.5 h-3.5 text-purple-500 shrink-0" />
-                  <span className="truncate" title={uploadedFile.name}>{uploadedFile.name}</span>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-zinc-400 text-[9px]">({(uploadedFile.size / (1024 * 1024)).toFixed(2)}MB)</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      saveStateToHistory();
-                      updateNodeData(id, { uploadedFile: null });
-                    }}
-                    className="p-0.5 hover:bg-zinc-100 rounded text-zinc-400 hover:text-red-500 transition-colors"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+              <div className="flex-1 flex items-center justify-between gap-1.5 py-1.5 px-3 bg-white border border-[#dadce0] rounded-lg text-[10px] font-medium text-zinc-700 nodrag">
+                <span className="truncate" title={uploadedFile.name}>{uploadedFile.name}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveStateToHistory();
+                    updateNodeData(id, { uploadedFile: null });
+                  }}
+                  className="text-red-500 hover:text-red-700 font-bold ml-1 shrink-0"
+                >
+                  ✕
+                </button>
               </div>
             ) : (
               <button
@@ -1181,9 +1594,9 @@ export function GeminiNode({ id, data }: NodeProps) {
                   const el = document.getElementById(`file-upload-${id}`);
                   if (el) el.click();
                 }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1 px-2.5 bg-white border border-zinc-200 hover:border-zinc-300 rounded text-[10px] font-semibold text-zinc-655 hover:bg-zinc-50 transition-colors cursor-pointer nodrag"
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-[10px] font-medium text-zinc-600 transition-colors cursor-pointer nodrag"
               >
-                <FileIcon className="w-3 h-3 text-zinc-400" />
+                <Upload className="w-3.5 h-3.5 text-zinc-400" />
                 <span>Upload file</span>
               </button>
             )}
@@ -1194,37 +1607,45 @@ export function GeminiNode({ id, data }: NodeProps) {
               onChange={(e) => handleSingleFileUpload(e, 'uploadedFile')}
               className="hidden"
             />
-            
-            <button className="p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-650 border border-transparent transition-colors shrink-0 font-semibold">
-              <Plus className="w-3 h-3" />
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById(`file-upload-${id}`);
+                if (el) el.click();
+              }}
+              disabled={isFileConnected}
+              className="flex items-center justify-center w-7 h-7 bg-[#f8f9fa] border border-[#dadce0] hover:bg-[#f1f3f4] rounded-lg text-zinc-500 hover:text-zinc-700 transition-colors font-semibold shrink-0 nodrag"
+            >
+              <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
         {/* Collapsible Settings */}
-        <div className="border-t border-zinc-100 pt-3">
+        <div className="pt-2">
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="flex items-center justify-between w-full text-xs text-zinc-550 hover:text-zinc-700 transition-colors"
+            className="flex items-center gap-1 w-full text-[11px] text-zinc-500 hover:text-zinc-700 transition-colors font-semibold nodrag"
           >
-            <span className="flex items-center gap-1.5 font-medium">
-              <Settings className="w-3.5 h-3.5" />
-              Settings
-            </span>
-            {showSettings ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            {showSettings ? (
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+            )}
+            <span>Settings</span>
           </button>
 
           {showSettings && (
-            <div className="space-y-3 mt-3 bg-zinc-50 p-3 rounded-lg border border-zinc-200">
+            <div className="space-y-3 mt-3 bg-[#f8f9fa] p-3 rounded-xl border border-[#dadce0]">
               <div className="space-y-1">
-                <label className="text-[9px] text-zinc-555 font-bold uppercase">Model</label>
+                <label className="text-[9px] text-zinc-500 font-bold uppercase">Model</label>
                 <select
                   value={model}
                   onChange={(e) => {
                     saveStateToHistory();
                     updateNodeData(id, { model: e.target.value });
                   }}
-                  className="text-xs bg-white border border-zinc-200 rounded px-2 py-1 focus:outline-none focus:border-purple-500 text-zinc-700 w-full font-medium nodrag"
+                  className="text-xs bg-white border border-[#dadce0] rounded px-2 py-1 focus:outline-none focus:border-purple-500 text-zinc-700 w-full font-medium nodrag"
                 >
                   <option value="Gemini 3.5 Flash">Gemini 3.5 Flash</option>
                   <option value="Gemini 3.1 Pro">Gemini 3.1 Pro</option>
@@ -1248,7 +1669,7 @@ export function GeminiNode({ id, data }: NodeProps) {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[9px] text-zinc-550 font-bold uppercase">Max Tokens</label>
+                  <label className="text-[9px] text-zinc-500 font-bold uppercase">Max Tokens</label>
                   <input
                     type="number"
                     min="1"
@@ -1256,7 +1677,7 @@ export function GeminiNode({ id, data }: NodeProps) {
                     value={maxTokens}
                     onFocus={saveStateToHistory}
                     onChange={(e) => updateNodeData(id, { maxTokens: parseInt(e.target.value) || 2048 })}
-                    className="w-full text-xs bg-white border border-zinc-200 rounded px-2 py-1 text-zinc-805 focus:outline-none focus:border-purple-500 nodrag"
+                    className="w-full text-xs bg-white border border-[#dadce0] rounded px-2 py-1 text-zinc-700 focus:outline-none focus:border-purple-500 nodrag"
                   />
                 </div>
               </div>
@@ -1265,17 +1686,25 @@ export function GeminiNode({ id, data }: NodeProps) {
         </div>
 
         {/* Response preview */}
-        <div className="border-t border-zinc-100 pt-3 space-y-1.5 relative">
-          <div className="flex items-center gap-1 select-none">
-            <Sparkles className="w-3.5 h-3.5 text-purple-600 animate-pulse" />
-            <span className="text-[10px] text-zinc-600 font-semibold">Response</span>
+        <div className="border-t border-zinc-100 pt-3.5 space-y-2 relative">
+          <div className="flex items-center select-none">
+            <span className="text-[11px] text-zinc-500 font-semibold">Response</span>
           </div>
-          <div className="w-full min-h-[100px] max-h-56 bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 nodrag nowheel">
+          <div className="w-full min-h-[100px] max-h-56 bg-[#f8f9fa] border border-[#dadce0] rounded-xl p-3 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-300 nodrag nowheel">
             {responseText ? (
               <MarkdownRenderer content={responseText} />
             ) : (
-              <span className="text-[11px] font-mono text-zinc-400 italic">No output yet</span>
+              <div className="h-16 flex items-center justify-center text-zinc-400 text-[11px] font-semibold italic">
+                No output yet
+              </div>
             )}
+          </div>
+          
+          <div className="flex justify-end pt-1">
+            <div className="flex items-center gap-1 text-[9px] text-zinc-400 font-bold select-none">
+              <span>🔗</span>
+              <span>~0.0001M</span>
+            </div>
           </div>
           
           <Handle
@@ -1301,6 +1730,28 @@ export function ResponseNode({ id, data }: NodeProps) {
   const result = data.output?.result || data.result || '';
   const edges = useWorkflowStore((state) => state.edges);
   const nodes = useWorkflowStore((state) => state.nodes);
+  const setNodes = useWorkflowStore((state) => state.setNodes);
+  const setEdges = useWorkflowStore((state) => state.setEdges);
+  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+
+  const handleDeleteNode = () => {
+    saveStateToHistory();
+    setNodes(nodes.filter((n) => n.id !== id));
+    setEdges(edges.filter((e) => e.source !== id && e.target !== id));
+  };
+
+  const handleResetNode = () => {
+    saveStateToHistory();
+    updateNodeData(id, {
+      result: '',
+      output: {},
+      duration: undefined,
+      error: undefined,
+    });
+  };
 
   const isBase64Image = (str: string) => {
     return typeof str === 'string' && (str.startsWith('data:image/') || str.startsWith('http://') || str.startsWith('https://'));
@@ -1320,18 +1771,82 @@ export function ResponseNode({ id, data }: NodeProps) {
 
   return (
     <div
-      className={`w-[320px] max-w-[320px] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-lg overflow-hidden p-4 text-zinc-900 transition-all duration-300 ${
-        data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300'
+      className={`w-[280px] max-w-[280px] flex flex-col bg-white border border-zinc-200/90 rounded-xl shadow-md overflow-hidden p-3.5 text-zinc-900 transition-all duration-300 cursor-default ${
+        data.isRunning ? 'animate-pulse-glow border-purple-500' : 'hover:border-zinc-300 hover:shadow-lg'
       }`}
     >
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100">
-        <div className="flex items-center gap-2">
-          <Play className="w-4 h-4 text-emerald-600" />
-          <span className="font-semibold text-xs text-zinc-700">
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100 relative react-flow__drag-handle cursor-grab active:cursor-grabbing">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Play className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span className="font-bold text-xs text-zinc-700 tracking-wide truncate">
             {data.label || 'Response'}
           </span>
         </div>
+        <div className="flex items-center gap-1.5 shrink-0 nodrag">
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              setInfoOpen(!infoOpen);
+            }} 
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0" 
+            title="Node Info"
+          >
+            <Info className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              handleResetNode();
+            }} 
+            className="text-zinc-400 hover:text-zinc-600 transition-colors shrink-0" 
+            title="Reset Node Output"
+          >
+            <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
+          </button>
+
+          <div className="relative">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(!menuOpen);
+              }}
+              className={`p-1 hover:bg-zinc-150 rounded text-zinc-400 hover:text-zinc-655 transition-colors ${menuOpen ? 'bg-zinc-100 text-zinc-600' : ''}`}
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+            
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-7 z-50 bg-white border border-zinc-200 rounded-lg shadow-xl py-1 w-32 text-xs nodrag">
+                  <button
+                    onClick={() => {
+                      handleDeleteNode();
+                      setMenuOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 font-bold transition-colors cursor-pointer"
+                  >
+                    Delete Node
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
+
+      {infoOpen && (
+        <div className="mb-3.5 p-2.5 bg-zinc-50 border border-zinc-200 rounded-lg text-[10px] text-zinc-600 leading-normal relative nodrag">
+          <button 
+            onClick={() => setInfoOpen(false)}
+            className="absolute top-1.5 right-1.5 text-zinc-400 hover:text-zinc-600"
+          >
+            <X className="w-2.5 h-2.5" />
+          </button>
+          <div className="font-semibold text-zinc-800 mb-0.5">About Response</div>
+          Displays the final response output text or cropped image preview from the workflow execution.
+        </div>
+      )}
 
       <div className="space-y-2 relative">
         <Handle

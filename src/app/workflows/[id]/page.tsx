@@ -1,9 +1,23 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Play, Save, Edit3, Loader2, Check, History, X, Download, Upload, Undo2, Redo2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Play,
+  Square,
+  Loader2,
+  X,
+  Clock,
+  Settings2,
+  Edit3,
+  Check,
+  CreditCard,
+  Wallet,
+  PanelLeft,
+  Save,
+} from 'lucide-react';
 import { useWorkflowStore } from '@/store/useWorkflowStore';
 import WorkflowCanvas from '@/components/canvas/WorkflowCanvas';
 import { ReactFlowProvider } from 'reactflow';
@@ -14,12 +28,14 @@ interface RunHistoryItem {
   duration: string;
   timestamp: string;
   scope: string;
+  triggerType: string;
+  nodeExecutions?: any[];
 }
 
 /**
  * WorkflowBuilderPage
  * Main workspace React page for designing and executing visual canvas workflows.
- * Orchestrates React Flow canvas synchronization, state serialization, run history, and undo/redo stacks.
+ * Redesigned to match Galaxy.ai layout: full-screen canvas with floating overlays.
  */
 export default function WorkflowBuilderPage() {
   const params = useParams();
@@ -31,10 +47,6 @@ export default function WorkflowBuilderPage() {
   const setNodes = useWorkflowStore((state) => state.setNodes);
   const setEdges = useWorkflowStore((state) => state.setEdges);
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
-  const undo = useWorkflowStore((state) => state.undo);
-  const redo = useWorkflowStore((state) => state.redo);
-  const undoStack = useWorkflowStore((state) => state.undoStack);
-  const redoStack = useWorkflowStore((state) => state.redoStack);
 
   const [name, setName] = useState('Untitled Workflow');
   const [isEditingName, setIsEditingName] = useState(false);
@@ -43,15 +55,19 @@ export default function WorkflowBuilderPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
-
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(false);
+  // Removed activeTab to show UI runs directly in execution history
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+
+  // Ref to cancel polling when stop is pressed
+  const pollActiveRef = useRef(false);
+  const lastProcessedRunRef = useRef<{ id: string; status: string } | null>(null);
+  const activeUiRunIdRef = useRef<string | null>(null);
+  const isStartingRunRef = useRef(false);
+  const pollingRunIdRef = useRef<string | null>(null);
 
   // --- INITIALIZE & LOAD CANVAS DATA ---
-  /**
-   * Loads target workflow layout (nodes and edges lists) from NextJS API routes on mount.
-   * If parameter equals 'new', initializes default Request Inputs and Response cards.
-   */
   useEffect(() => {
     async function loadWorkflow() {
       setIsLoading(true);
@@ -60,21 +76,21 @@ export default function WorkflowBuilderPage() {
           {
             id: 'request-inputs',
             type: 'requestInputs',
-            position: { x: 100, y: 200 },
+            position: { x: 80, y: 240 },
             data: { fields: [], isRunning: false },
             deletable: false,
           },
           {
             id: 'response',
             type: 'response',
-            position: { x: 700, y: 200 },
+            position: { x: 1050, y: 240 },
             data: { result: '', isRunning: false },
             deletable: false,
           },
         ];
         setNodes(defaultNodes);
         setEdges([]);
-        setName('Untitled Workflow');
+        setName('New Workflow');
         setIsLoading(false);
       } else {
         try {
@@ -100,14 +116,40 @@ export default function WorkflowBuilderPage() {
           setEdges(loadedEdges || []);
 
           if (data.runs && Array.isArray(data.runs)) {
-            const history = data.runs.map((r: any) => ({
-              id: r.id,
-              status: r.status as 'SUCCESS' | 'FAILED' | 'RUNNING',
-              duration: r.duration.toFixed(1) + 's',
-              timestamp: new Date(r.timestamp).toLocaleTimeString(),
-              scope: r.scope,
-            }));
+            const history = data.runs.map((r: any) => {
+              const isRunning = r.status === 'RUNNING';
+              const durationStr = isRunning
+                ? (Math.max(0, Date.now() - new Date(r.timestamp).getTime()) / 1000).toFixed(1) + 's'
+                : r.duration.toFixed(1) + 's';
+              return {
+                id: r.id,
+                status: r.status as 'SUCCESS' | 'FAILED' | 'RUNNING',
+                duration: durationStr,
+                timestamp: r.timestamp,
+                scope: r.scope,
+                triggerType: r.triggerType || 'API',
+                nodeExecutions: r.nodeExecutions || [],
+              };
+            });
             setRunHistory(history);
+
+            // Sync isExecuting on initial load if there is a running UI run
+            const runningUiRun = history.find((r: any) => r.triggerType === 'UI' && r.status === 'RUNNING');
+            if (runningUiRun) {
+              activeUiRunIdRef.current = runningUiRun.id;
+              setIsExecuting(true);
+              pollActiveRef.current = true;
+            } else {
+              // Fallback: if no UI runs are running, check if latest run is RUNNING (could be API)
+              const latestRun = history[0];
+              if (latestRun && latestRun.status === 'RUNNING') {
+                if (latestRun.triggerType === 'UI') {
+                  activeUiRunIdRef.current = latestRun.id;
+                }
+                setIsExecuting(true);
+                pollActiveRef.current = true;
+              }
+            }
           } else {
             setRunHistory([]);
           }
@@ -124,48 +166,250 @@ export default function WorkflowBuilderPage() {
 
   // --- KEYBOARD SHORTCUTS FOR UNDO / REDO ---
   useEffect(() => {
+    const undo = useWorkflowStore.getState().undo;
+    const redo = useWorkflowStore.getState().redo;
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
-        return;
-      }
-
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-
       if (cmdOrCtrl && e.key?.toLowerCase() === 'z') {
         e.preventDefault();
-        if (e.shiftKey) {
-          redo();
-        } else {
-          undo();
-        }
+        if (e.shiftKey) redo(); else undo();
       } else if (cmdOrCtrl && e.key?.toLowerCase() === 'y') {
         e.preventDefault();
         redo();
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [undo, redo]);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
-  // --- DOUBLE CLICK RENAME HANDLERS ---
-  const handleStartRename = () => {
-    setTempName(name);
-    setIsEditingName(true);
-  };
+  // --- POLL RUN HISTORY FOR API RUNS AND EXTERNAL TRIGGERS ---
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/workflows/${id}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.runs && Array.isArray(data.runs)) {
+            const history: RunHistoryItem[] = data.runs.map((r: any) => {
+              const isRunning = r.status === 'RUNNING';
+              const durationStr = isRunning
+                ? (Math.max(0, Date.now() - new Date(r.timestamp).getTime()) / 1000).toFixed(1) + 's'
+                : r.duration.toFixed(1) + 's';
+              return {
+                id: r.id,
+                status: r.status as 'SUCCESS' | 'FAILED' | 'RUNNING',
+                duration: durationStr,
+                timestamp: r.timestamp,
+                scope: r.scope,
+                triggerType: r.triggerType || 'API',
+                nodeExecutions: r.nodeExecutions || [],
+              };
+            });
+            
+            // Make sure the active local UI run is preserved if it's not on the server yet
+            let updatedHistory = history;
+            if (activeUiRunIdRef.current && !history.some((r: any) => r.id === activeUiRunIdRef.current)) {
+              const localActiveRun = runHistory.find((r: any) => r.id === activeUiRunIdRef.current);
+              if (localActiveRun) {
+                updatedHistory = [localActiveRun, ...history];
+              }
+            }
 
-  const handleFinishRename = () => {
-    if (tempName.trim()) {
-      setName(tempName.trim());
+            setRunHistory((prev) => {
+              // Only update if there are status or count changes to preserve active polling durations
+              const isDifferent = updatedHistory.length !== prev.length || updatedHistory.some((h, i) => prev[i]?.id !== h.id || prev[i]?.status !== h.status);
+              if (isDifferent) {
+                return updatedHistory;
+              }
+              return prev;
+            });
+
+            // Update active run reference if server reports completion
+            const activeUiRunOnServer = history.find((r: any) => r.id === activeUiRunIdRef.current);
+
+            if (isStartingRunRef.current) {
+              // Triggering in progress, keep UI run indicator active
+              setIsExecuting(true);
+              pollActiveRef.current = true;
+            } else {
+              // Sync isExecuting and pollActiveRef with the active UI run
+              if (activeUiRunIdRef.current) {
+                setIsExecuting(true);
+                pollActiveRef.current = true;
+              } else {
+                setIsExecuting(false);
+                pollActiveRef.current = false;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to poll background run history:', err);
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [id]);
+
+  // --- REAL-TIME RUNNING DURATION TICKING ---
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setRunHistory((prev) => {
+        const hasRunning = prev.some((r) => r.status === 'RUNNING');
+        if (!hasRunning) return prev;
+        return prev.map((run) => {
+          if (run.status === 'RUNNING') {
+            const currentSec = parseFloat(run.duration) || 0;
+            const updatedExecutions = run.nodeExecutions?.map((exec: any) => {
+              if (exec.status === 'RUNNING') {
+                return {
+                  ...exec,
+                  duration: (exec.duration || 0) + 0.1,
+                };
+              }
+              return exec;
+            });
+            return {
+              ...run,
+              duration: (currentSec + 0.1).toFixed(1) + 's',
+              nodeExecutions: updatedExecutions,
+            };
+          }
+          return run;
+        });
+      });
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // --- POLL RUNNING RUN DETAILS (FOR LIVE CANVAS HIGHLIGHTS) ---
+  useEffect(() => {
+    if (!id || id === 'new' || runHistory.length === 0) return;
+    const activeRun = runHistory.find((r: any) => r.triggerType === 'UI' && r.status === 'RUNNING')
+      || runHistory.find((r: any) => r.triggerType === 'UI')
+      || runHistory[0];
+
+    if (!activeRun) return;
+    const runId = activeRun.id;
+    const runStatus = activeRun.status;
+
+    const wasProcessed = lastProcessedRunRef.current?.id === runId && lastProcessedRunRef.current?.status === runStatus;
+    if (wasProcessed && runStatus !== 'RUNNING') {
+      return;
     }
-    setIsEditingName(false);
-  };
 
-  // --- SAVE WORKFLOW TO DATABASE ---
+    if (runStatus === 'RUNNING') {
+      if (pollingRunIdRef.current === runId) {
+        return; // Guard to prevent restarting the polling loop on every ticker tick
+      }
+      pollingRunIdRef.current = runId;
+    } else {
+      pollingRunIdRef.current = null;
+    }
+
+    let active = true;
+
+    const fetchDetails = async () => {
+      try {
+        const res = await fetch(`/api/runs/${runId}`);
+        if (res.ok) {
+          const runState = await res.json();
+          const executions = runState.nodeExecutions || [];
+
+          const liveNodes = useWorkflowStore.getState().nodes;
+          const liveEdges = useWorkflowStore.getState().edges;
+
+          const updatedNodes = liveNodes.map((node) => {
+            const exec = executions.find((e: any) => e.nodeId === node.id);
+            if (!exec) return node;
+
+            if (exec.status === 'RUNNING') {
+              return { ...node, data: { ...node.data, isRunning: true } };
+            } else if (exec.status === 'SUCCESS') {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  isRunning: false,
+                  duration: exec.duration,
+                  ...(node.type === 'gemini' && { response: exec.output?.response || '' }),
+                  ...(node.type === 'cropImage' && { output: exec.output || {} }),
+                  ...(node.type === 'response' && { result: exec.output?.result || '' }),
+                  ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
+                }
+              };
+            } else if (exec.status === 'FAILED') {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  isRunning: false,
+                  duration: exec.duration,
+                  error: exec.errorMessage || 'Execution failed'
+                }
+              };
+            }
+            return node;
+          });
+
+          const updatedEdges = liveEdges.map((e) => {
+            const sourceExec = executions.find((ex: any) => ex.nodeId === e.source);
+            const targetExec = executions.find((ex: any) => ex.nodeId === e.target);
+            const isEdgeActive = sourceExec?.status === 'SUCCESS' && (targetExec?.status === 'RUNNING' || targetExec?.status === 'PENDING');
+            return { ...e, data: { isRunning: isEdgeActive } };
+          });
+
+          useWorkflowStore.setState({
+            nodes: updatedNodes,
+            edges: updatedEdges,
+          });
+
+          // Update the run's nodeExecutions inside runHistory state so steps update live in Execution History drawer
+          setRunHistory((prev) =>
+            prev.map((item) =>
+              item.id === runId
+                ? { ...item, nodeExecutions: executions }
+                : item
+            )
+          );
+
+          if (runStatus !== 'RUNNING') {
+            lastProcessedRunRef.current = { id: runId, status: runStatus };
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching execution details:', err);
+      }
+    };
+
+    if (runStatus === 'RUNNING') {
+      const poll = async () => {
+        if (!active) return;
+        await fetchDetails();
+        if (active) {
+          setTimeout(poll, 1500);
+        }
+      };
+      poll();
+      return () => {
+        active = false;
+        pollingRunIdRef.current = null;
+      };
+    } else {
+      fetchDetails();
+      lastProcessedRunRef.current = { id: runId, status: runStatus };
+    }
+  }, [runHistory, id]);
+
+  // --- RENAME HANDLERS ---
+  const handleStartRename = () => { setTempName(name); setIsEditingName(true); };
+  const handleFinishRename = () => { if (tempName.trim()) setName(tempName.trim()); setIsEditingName(false); };
+
+  // --- SAVE WORKFLOW ---
   const handleSaveWorkflow = async () => {
     setIsSaving(true);
     setIsSaved(false);
@@ -176,38 +420,21 @@ export default function WorkflowBuilderPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name }),
         });
-
         if (!createRes.ok) throw new Error('Failed to create workflow');
         const created = await createRes.json();
-
         const updateRes = await fetch(`/api/workflows/${created.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            nodes,
-            edges,
-          }),
+          body: JSON.stringify({ nodes, edges }),
         });
-
-        if (updateRes.ok) {
-          setIsSaved(true);
-          router.replace(`/workflows/${created.id}`);
-        }
+        if (updateRes.ok) { setIsSaved(true); router.replace(`/workflows/${created.id}`); }
       } else {
         const res = await fetch(`/api/workflows/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name,
-            nodes,
-            edges,
-          }),
+          body: JSON.stringify({ name, nodes, edges }),
         });
-
-        if (res.ok) {
-          setIsSaved(true);
-          setTimeout(() => setIsSaved(false), 3000);
-        }
+        if (res.ok) { setIsSaved(true); setTimeout(() => setIsSaved(false), 3000); }
       }
     } catch (err) {
       console.error('Error saving workflow:', err);
@@ -216,339 +443,390 @@ export default function WorkflowBuilderPage() {
     }
   };
 
-  // --- RUN WORKFLOW WITH ACTUAL TRIGGER.DEV POLLING ---
-  /**
-   * Orchestrates the execution of the workflow.
-   * 1. Saves current canvas node/edge configuration to postgres.
-   * 2. Calls POST /api/workflows/run, creating database tracking records.
-   * 3. Loops setTimeout polling requests checking run progress.
-   * 4. Updates individual React Flow node states on status transition (PENDING -> RUNNING -> SUCCESS/FAILED).
-   * 5. Animates active running edges connection paths.
-   */
+  // --- STOP WORKFLOW ---
+  const handleStopWorkflow = async () => {
+    pollActiveRef.current = false;
+    setIsExecuting(false);
+
+    const runIdToAbort = activeUiRunIdRef.current;
+    activeUiRunIdRef.current = null;
+
+    const currentNodes = useWorkflowStore.getState().nodes;
+    currentNodes.forEach((n) => updateNodeData(n.id, { isRunning: false }));
+
+    const currentEdges = useWorkflowStore.getState().edges;
+    useWorkflowStore.setState({
+      edges: currentEdges.map((e) => ({ ...e, data: { isRunning: false } })),
+    });
+
+    if (runIdToAbort) {
+      // Optimistically update runHistory immediately so the history UI stops running instantly!
+      setRunHistory((prev) =>
+        prev.map((item) =>
+          item.id === runIdToAbort
+            ? {
+                ...item,
+                status: 'FAILED',
+                nodeExecutions: item.nodeExecutions?.map((exec: any) =>
+                  exec.status === 'RUNNING' || exec.status === 'PENDING'
+                    ? { ...exec, status: 'FAILED' }
+                    : exec
+                )
+              }
+            : item
+        )
+      );
+
+      try {
+        await fetch(`/api/runs/${runIdToAbort}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'FAILED' }),
+        });
+      } catch (err) {
+        console.error('Failed to abort run on server:', err);
+      }
+    }
+  };
+
+  // --- RUN WORKFLOW ---
   const handleRunWorkflow = async (targetNodeId?: string) => {
     if (isExecuting) return;
+    isStartingRunRef.current = true;
     setIsExecuting(true);
+    pollActiveRef.current = true;
 
     const startTime = Date.now();
     const scope = targetNodeId ? 'PARTIAL' : 'FULL';
 
-    // 1. Reset visual node execution states in store
-    nodes.forEach((n) => {
-      updateNodeData(n.id, { isRunning: false });
+    // Clear execution states and mark starting node immediately
+    const currentNodes = useWorkflowStore.getState().nodes;
+    currentNodes.forEach((n) => {
+      updateNodeData(n.id, { isRunning: false, duration: undefined, error: undefined });
     });
 
+    const startNode = currentNodes.find(n => n.id === 'request-inputs' || n.type === 'requestInputs');
+    if (startNode && !targetNodeId) {
+      updateNodeData(startNode.id, { isRunning: true });
+    } else if (targetNodeId) {
+      updateNodeData(targetNodeId, { isRunning: true });
+    }
+
     try {
-      // Auto-save the current canvas state first so the backend gets the latest inputs
+      const currentEdges = useWorkflowStore.getState().edges;
       const saveRes = await fetch(`/api/workflows/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name,
-          nodes,
-          edges,
-        }),
+        body: JSON.stringify({ name, nodes: currentNodes, edges: currentEdges }),
       });
+      if (!saveRes.ok) throw new Error('Failed to auto-save workflow state before execution');
 
-      if (!saveRes.ok) {
-        throw new Error('Failed to auto-save workflow state before execution');
-      }
-
-      // 2. POST to trigger run API
       const res = await fetch('/api/workflows/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workflowId: id,
-          nodeId: targetNodeId,
-          scope,
-        }),
+        body: JSON.stringify({ workflowId: id, nodeId: targetNodeId, scope, triggerType: 'UI' }),
       });
-
-      if (!res.ok) {
-        throw new Error('Failed to start workflow execution');
-      }
+      if (!res.ok) throw new Error('Failed to start workflow execution');
 
       const runResponse = await res.json();
       const runId = runResponse.runId;
+      activeUiRunIdRef.current = runId;
 
-      // 3. Start local recursive setTimeout polling
-      let isPollActive = true;
+      // Add to runHistory immediately with RUNNING status
+      const initialRunItem: RunHistoryItem = {
+        id: runId,
+        status: 'RUNNING',
+        duration: '0.0s',
+        timestamp: new Date().toISOString(),
+        scope,
+        triggerType: 'UI',
+      };
+      setRunHistory((prev) => [initialRunItem, ...prev]);
+
+      isStartingRunRef.current = false;
+
       const poll = async () => {
-        if (!isPollActive) return;
+        if (!pollActiveRef.current) return;
         try {
           const statusRes = await fetch(`/api/runs/${runId}`);
           if (!statusRes.ok) {
-            if (isPollActive) setTimeout(poll, 1500);
+            if (pollActiveRef.current) setTimeout(poll, 800);
             return;
           }
 
           const runState = await statusRes.json();
-          if (!isPollActive) return;
+          if (!pollActiveRef.current) return;
 
-          const executions = runState.nodeExecutions || [];
-
-          // Map node execution statuses directly to React Flow store
-          executions.forEach((exec: any) => {
-            const node = nodes.find((n) => n.id === exec.nodeId);
-            if (!node) return;
-
-            if (exec.status === 'RUNNING') {
-              updateNodeData(exec.nodeId, { isRunning: true });
-            } else if (exec.status === 'SUCCESS') {
-              // Node succeeded: update outputs
-              updateNodeData(exec.nodeId, {
-                isRunning: false,
-                duration: exec.duration,
-                ...(node.type === 'gemini' && { response: exec.output?.response || '' }),
-                ...(node.type === 'cropImage' && { output: exec.output || {} }),
-                ...(node.type === 'response' && { result: exec.output?.result || '' }),
-                ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
-              });
-            } else if (exec.status === 'FAILED') {
-              updateNodeData(exec.nodeId, {
-                isRunning: false,
-                duration: exec.duration,
-                error: exec.errorMessage || 'Execution failed',
-              });
-            }
-          });
-
-          // Check if overall run has completed
+          // Update running history item duration and status in real-time
           if (runState.status === 'SUCCESS' || runState.status === 'FAILED') {
-            isPollActive = false;
+            pollActiveRef.current = false;
             setIsExecuting(false);
+            activeUiRunIdRef.current = null;
 
-            const durationStr = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
-            const finalRunHistoryItem: RunHistoryItem = {
-              id: runId,
-              status: runState.status,
-              duration: durationStr,
-              timestamp: new Date().toLocaleTimeString(),
-              scope,
-            };
-            setRunHistory((prev) => {
-              if (prev.some((item) => item.id === runId)) return prev;
-              return [finalRunHistoryItem, ...prev];
+            // Use accurate database duration on completion
+            const finalDuration = runState.duration.toFixed(1) + 's';
+            setRunHistory((prev) =>
+              prev.map((item) =>
+                item.id === runId
+                  ? { ...item, status: runState.status, duration: finalDuration, nodeExecutions: runState.nodeExecutions }
+                  : item
+              )
+            );
+
+            const liveNodes = useWorkflowStore.getState().nodes;
+            const liveEdges = useWorkflowStore.getState().edges;
+            const executions = runState.nodeExecutions || [];
+
+            const updatedNodes = liveNodes.map((node) => {
+              const exec = executions.find((e: any) => e.nodeId === node.id);
+              if (!exec) return node;
+
+              if (exec.status === 'SUCCESS') {
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    isRunning: false,
+                    duration: exec.duration,
+                    ...(node.type === 'gemini' && { response: exec.output?.response || '' }),
+                    ...(node.type === 'cropImage' && { output: exec.output || {} }),
+                    ...(node.type === 'response' && { result: exec.output?.result || '' }),
+                    ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
+                  }
+                };
+              } else if (exec.status === 'FAILED') {
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    isRunning: false,
+                    duration: exec.duration,
+                    error: exec.errorMessage || 'Execution failed'
+                  }
+                };
+              }
+              return node;
             });
 
-            // Set edges isRunning to false
+            const updatedEdges = liveEdges.map((e) => ({ ...e, data: { isRunning: false } }));
+
             useWorkflowStore.setState({
-              edges: edges.map((e) => ({ ...e, data: { isRunning: false } })),
+              nodes: updatedNodes,
+              edges: updatedEdges,
             });
           } else {
-            // Highlight active flowing edges
-            useWorkflowStore.setState({
-              edges: edges.map((e) => {
-                const sourceExec = executions.find((ex: any) => ex.nodeId === e.source);
-                const targetExec = executions.find((ex: any) => ex.nodeId === e.target);
-                // Edge is animating if source is success and target is running/pending
-                const isEdgeActive =
-                  sourceExec?.status === 'SUCCESS' &&
-                  (targetExec?.status === 'RUNNING' || targetExec?.status === 'PENDING');
+            const currentDuration = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
+            setRunHistory((prev) =>
+              prev.map((item) =>
+                item.id === runId
+                  ? { ...item, status: runState.status, duration: currentDuration, nodeExecutions: runState.nodeExecutions }
+                  : item
+              )
+            );
+
+            const executions = runState.nodeExecutions || [];
+            const liveNodes = useWorkflowStore.getState().nodes;
+            const liveEdges = useWorkflowStore.getState().edges;
+
+            const updatedNodes = liveNodes.map((node) => {
+              const exec = executions.find((e: any) => e.nodeId === node.id);
+              if (!exec) return node;
+
+              if (exec.status === 'RUNNING') {
+                return { ...node, data: { ...node.data, isRunning: true } };
+              } else if (exec.status === 'SUCCESS') {
                 return {
-                  ...e,
-                  data: { isRunning: isEdgeActive },
+                  ...node,
+                  data: {
+                    ...node.data,
+                    isRunning: false,
+                    duration: exec.duration,
+                    ...(node.type === 'gemini' && { response: exec.output?.response || '' }),
+                    ...(node.type === 'cropImage' && { output: exec.output || {} }),
+                    ...(node.type === 'response' && { result: exec.output?.result || '' }),
+                    ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
+                  }
                 };
-              }),
+              } else if (exec.status === 'FAILED') {
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    isRunning: false,
+                    duration: exec.duration,
+                    error: exec.errorMessage || 'Execution failed'
+                  }
+                };
+              }
+              return node;
             });
 
-            // Schedule next poll
-            if (isPollActive) {
-              setTimeout(poll, 1500);
-            }
+            const updatedEdges = liveEdges.map((e) => {
+              const sourceExec = executions.find((ex: any) => ex.nodeId === e.source);
+              const targetExec = executions.find((ex: any) => ex.nodeId === e.target);
+              const isEdgeActive = sourceExec?.status === 'SUCCESS' && (targetExec?.status === 'RUNNING' || targetExec?.status === 'PENDING');
+              return { ...e, data: { isRunning: isEdgeActive } };
+            });
+
+            useWorkflowStore.setState({
+              nodes: updatedNodes,
+              edges: updatedEdges,
+            });
+
+            if (pollActiveRef.current) setTimeout(poll, 800);
           }
         } catch (pollErr) {
           console.error('Error polling execution status:', pollErr);
-          if (isPollActive) {
-            setTimeout(poll, 1500);
-          }
+          if (pollActiveRef.current) setTimeout(poll, 800);
         }
       };
-
-      // Start the recursive poll
-      setTimeout(poll, 1500);
-
+      poll();
     } catch (err) {
       console.error('Trigger workflow execution failed:', err);
       alert('Failed to start workflow execution.');
       setIsExecuting(false);
+      pollActiveRef.current = false;
+      isStartingRunRef.current = false;
     }
   };
-  
-  // --- EXPORT AND IMPORT WORKFLOW AS JSON ---
+
+  // --- EXPORT JSON ---
   const handleExportWorkflow = () => {
-    const workflowData = {
-      name,
-      nodes,
-      edges,
-    };
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(workflowData, null, 2));
+    const workflowData = { name, nodes, edges };
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(workflowData, null, 2));
     const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `${name.toLowerCase().replace(/\s+/g, '_')}_workflow.json`);
+    downloadAnchor.setAttribute('href', dataStr);
+    downloadAnchor.setAttribute('download', `${name.toLowerCase().replace(/\s+/g, '_')}_workflow.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
   };
 
+  // --- IMPORT JSON ---
   const handleImportWorkflow = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const imported = JSON.parse(event.target?.result as string);
-        if (!imported.nodes || !imported.edges) {
-          alert("Invalid workflow file format: Must contain nodes and edges");
-          return;
-        }
-
-        // Ensure requestInputs and response are not deleted and remain sanitized
+        if (!imported.nodes || !imported.edges) { alert('Invalid workflow file format: Must contain nodes and edges'); return; }
         const sanitizedNodes = imported.nodes.map((n: any) => {
-          if (n.id === 'request-inputs' || n.id === 'response') {
-            return { ...n, deletable: false };
-          }
+          if (n.id === 'request-inputs' || n.id === 'response') return { ...n, deletable: false };
           return n;
         });
-
-        // Validate it contains request-inputs and response
         const hasRequestInputs = sanitizedNodes.some((n: any) => n.id === 'request-inputs');
         const hasResponse = sanitizedNodes.some((n: any) => n.id === 'response');
-        if (!hasRequestInputs || !hasResponse) {
-          alert("Invalid workflow: Must contain 'request-inputs' and 'response' nodes");
-          return;
-        }
-
-        if (imported.name) {
-          setName(imported.name);
-        }
+        if (!hasRequestInputs || !hasResponse) { alert("Invalid workflow: Must contain 'request-inputs' and 'response' nodes"); return; }
+        if (imported.name) setName(imported.name);
         setNodes(sanitizedNodes);
         setEdges(imported.edges);
-
-        alert("Workflow imported successfully! Click 'Save Flow' to persist changes.");
       } catch (err) {
-        console.error("Failed to parse JSON file:", err);
-        alert("Failed to parse workflow file. Ensure it is a valid JSON file.");
+        console.error('Failed to parse JSON file:', err);
+        alert('Failed to parse workflow file. Ensure it is a valid JSON file.');
       }
     };
     reader.readAsText(file);
     e.target.value = '';
   };
 
-  // --- RESET WORKFLOW OUTPUTS & INPUTS ---
-  /**
-   * Resets all canvas nodes to their baseline settings, deleting execution times and logs.
-   * Saves updated state to Database immediately to prevent local/remote conflicts.
-   */
+  // --- RESET WORKFLOW ---
   const handleResetWorkflow = async () => {
     if (isExecuting || isSaving) return;
-
-    // Save history before resetting
     const saveStateToHistory = useWorkflowStore.getState().saveStateToHistory;
     saveStateToHistory();
-
-    // Reset visual nodes execution data locally
     const resetNodes = nodes.map((node) => {
       const updatedData = { ...node.data };
-
-      // Clear execution parameters and statuses
       delete updatedData.duration;
       delete updatedData.error;
       updatedData.isRunning = false;
-
-      // Clear specific output properties depending on the node type
-      if (node.type === 'cropImage') {
-        updatedData.imageUrl = '';
-        updatedData.output = {};
-      } else if (node.type === 'gemini') {
-        updatedData.response = '';
-        updatedData.imageUrl = '';
-        updatedData.output = {};
-        updatedData.uploadedImages = [];
-        updatedData.uploadedVideo = null;
-        updatedData.uploadedAudio = null;
-        updatedData.uploadedFile = null;
-      } else if (node.type === 'response') {
-        updatedData.result = '';
-        updatedData.output = {};
-      }
-
-      return {
-        ...node,
-        data: updatedData,
-      };
+      if (node.type === 'cropImage') { updatedData.imageUrl = ''; updatedData.output = {}; }
+      else if (node.type === 'gemini') { updatedData.response = ''; updatedData.imageUrl = ''; updatedData.output = {}; updatedData.uploadedImages = []; updatedData.uploadedVideo = null; updatedData.uploadedAudio = null; updatedData.uploadedFile = null; }
+      else if (node.type === 'response') { updatedData.result = ''; updatedData.output = {}; }
+      return { ...node, data: updatedData };
     });
-
     setNodes(resetNodes);
-
-    // Save the reset state in the database immediately so that reloading does not restore old state
     setIsSaving(true);
     try {
       const res = await fetch(`/api/workflows/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nodes: resetNodes,
-          edges,
-        }),
+        body: JSON.stringify({ nodes: resetNodes, edges }),
       });
-
-      if (res.ok) {
-        setIsSaved(true);
-        setTimeout(() => setIsSaved(false), 2000);
-      } else {
-        alert('Failed to save reset state to the database.');
-      }
+      if (res.ok) { setIsSaved(true); setTimeout(() => setIsSaved(false), 2000); }
     } catch (err) {
       console.error('Error saving reset state:', err);
-      alert('Failed to save reset state.');
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Listen to the node-level run play event from CustomNodes
+  const handleRunWorkflowRef = useRef(handleRunWorkflow);
+  const handleStopWorkflowRef = useRef(handleStopWorkflow);
+  useEffect(() => {
+    handleRunWorkflowRef.current = handleRunWorkflow;
+    handleStopWorkflowRef.current = handleStopWorkflow;
+  });
+
+  // Listen to node-level run event
   useEffect(() => {
     const handleRunNodeEvent = (e: Event) => {
       const customEvent = e as CustomEvent;
       const nodeId = customEvent.detail?.nodeId;
       if (nodeId) {
-        handleRunWorkflow(nodeId);
+        handleRunWorkflowRef.current(nodeId);
+      } else if (customEvent.detail && 'nodeId' in customEvent.detail && customEvent.detail.nodeId === null) {
+        handleStopWorkflowRef.current();
       }
     };
-
     window.addEventListener('run-node', handleRunNodeEvent);
-    return () => {
-      window.removeEventListener('run-node', handleRunNodeEvent);
-    };
-  }, [nodes, edges, isExecuting]);
+    return () => window.removeEventListener('run-node', handleRunNodeEvent);
+  }, []);
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-zinc-50 text-zinc-500 gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#f4f4f5] text-zinc-500 gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
         <span className="text-xs uppercase tracking-widest font-mono font-semibold">Loading Workspace...</span>
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-screen bg-[#fafafa] text-zinc-900 flex flex-col overflow-hidden">
-      {/* HEADER PANEL */}
-      <header className="h-14 border-b border-zinc-200 bg-white flex items-center justify-between px-6 shrink-0 z-10">
-        <div className="flex items-center gap-4">
+    <div className="h-screen w-screen overflow-hidden relative" style={{ background: '#fafafa' }}>
+      {/* ======== FULL-SCREEN CANVAS ======== */}
+      <div className="absolute inset-0">
+        <ReactFlowProvider>
+          <WorkflowCanvas
+            onExportJSON={handleExportWorkflow}
+            onImportJSON={handleImportWorkflow}
+            onSave={handleSaveWorkflow}
+            onReset={handleResetWorkflow}
+            isSaving={isSaving}
+            isSaved={isSaved}
+          />
+        </ReactFlowProvider>
+      </div>
+
+      {/* ======== TOP-LEFT FLOATING: Panel toggle + Back + Title ======== */}
+      <div className="absolute top-3 left-3 z-30 flex items-center gap-2 pointer-events-auto">
+        {/* Panel sidebar toggle */}
+        <button
+          onClick={() => setShowSidebar((v) => !v)}
+          className="w-9 h-9 bg-white/95 backdrop-blur-sm border border-zinc-200/80 rounded-lg shadow-sm flex items-center justify-center hover:bg-zinc-50 transition-colors text-zinc-500 hover:text-zinc-700"
+          title="Toggle Panel"
+        >
+          <PanelLeft className="w-4 h-4" />
+        </button>
+
+        {/* Back arrow + Workflow name white pill */}
+        <div className="bg-white/95 backdrop-blur-sm border border-zinc-200/80 rounded-xl shadow-sm px-3 py-2 flex items-center gap-2 min-w-[160px]">
           <Link
             href="/"
-            className="flex items-center gap-1.5 text-xs text-zinc-550 hover:text-zinc-800 transition-colors font-medium"
+            className="flex items-center text-zinc-500 hover:text-zinc-800 transition-colors shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
-            Dashboard
           </Link>
-
-          <div className="h-4 w-px bg-zinc-200" />
-
-          {/* RENAME INPUT CONTAINER */}
           {isEditingName ? (
             <input
               type="text"
@@ -556,166 +834,193 @@ export default function WorkflowBuilderPage() {
               onChange={(e) => setTempName(e.target.value)}
               onBlur={handleFinishRename}
               onKeyDown={(e) => e.key === 'Enter' && handleFinishRename()}
-              className="bg-zinc-50 border border-zinc-200 rounded px-2 py-0.5 text-sm text-zinc-800 focus:outline-none focus:border-purple-500 font-semibold"
+              className="bg-transparent border-none outline-none text-sm font-medium text-zinc-800 w-full"
               autoFocus
             />
           ) : (
             <div
               onDoubleClick={handleStartRename}
-              className="flex items-center gap-2 cursor-pointer group"
+              className="flex items-center gap-1.5 cursor-pointer group"
               title="Double-click to rename"
             >
-              <span className="text-sm font-semibold text-zinc-850">{name}</span>
-              <Edit3 className="w-3.5 h-3.5 text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <span className="text-sm font-medium text-zinc-800 truncate max-w-[180px]">{name}</span>
+              <Edit3 className="w-3 h-3 text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
             </div>
           )}
         </div>
-
-        {/* CONTROLS BUTTONS */}
-        <div className="flex items-center gap-3">
-          {/* Undo Button */}
-          <button
-            onClick={undo}
-            disabled={undoStack.length === 0}
-            className="flex items-center gap-1 px-2.5 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-700 disabled:opacity-40 disabled:hover:bg-white disabled:hover:border-zinc-200 disabled:cursor-not-allowed transition-all cursor-pointer"
-            title="Undo (Cmd+Z / Ctrl+Z)"
-          >
-            <Undo2 className="w-3.5 h-3.5" />
-            <span>Undo</span>
-          </button>
-
-          {/* Redo Button */}
-          <button
-            onClick={redo}
-            disabled={redoStack.length === 0}
-            className="flex items-center gap-1 px-2.5 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-700 disabled:opacity-40 disabled:hover:bg-white disabled:hover:border-zinc-200 disabled:cursor-not-allowed transition-all cursor-pointer"
-            title="Redo (Cmd+Shift+Z / Ctrl+Y)"
-          >
-            <Redo2 className="w-3.5 h-3.5" />
-            <span>Redo</span>
-          </button>
-
-          <div className="h-4 w-px bg-zinc-200 mx-1" />
-
-          {/* Export JSON Button */}
-          <button
-            onClick={handleExportWorkflow}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-700 transition-all cursor-pointer"
-            title="Export workflow as JSON"
-          >
-            <Download className="w-3.5 h-3.5 text-zinc-650" />
-            <span>Export JSON</span>
-          </button>
-
-          {/* Import JSON Button */}
-          <label
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-700 transition-all cursor-pointer"
-            title="Import workflow JSON file"
-          >
-            <Upload className="w-3.5 h-3.5 text-zinc-650" />
-            <span>Import JSON</span>
-            <input
-              type="file"
-              accept=".json"
-              onChange={handleImportWorkflow}
-              className="hidden"
-            />
-          </label>
-
-          {/* Reset Button */}
-          <button
-            onClick={handleResetWorkflow}
-            disabled={isExecuting || isSaving}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 border border-zinc-200 hover:border-red-200 hover:bg-red-50/50 rounded-lg text-xs font-semibold text-red-650 transition-all disabled:opacity-50"
-          >
-            Reset Flow
-          </button>
-
-          {/* Save Button */}
-          <button
-            onClick={handleSaveWorkflow}
-            disabled={isSaving}
-            className={`flex items-center gap-1.5 px-3 py-1.5 border border-zinc-200 hover:border-zinc-300 bg-white hover:bg-zinc-50 rounded-lg text-xs font-semibold text-zinc-750 transition-all ${isSaving ? 'opacity-70 pointer-events-none' : ''
-              }`}
-          >
-            {isSaving ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : isSaved ? (
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-            ) : (
-              <Save className="w-3.5 h-3.5 text-zinc-600" />
-            )}
-            {isSaving ? 'Saving...' : isSaved ? 'Saved' : 'Save Flow'}
-          </button>
-
-          {/* Run Button */}
-          <button
-            onClick={() => handleRunWorkflow()}
-            disabled={isExecuting}
-            className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 shadow-lg shadow-purple-500/10"
-          >
-            {isExecuting ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Play className="w-3.5 h-3.5 fill-current" />
-            )}
-            {isExecuting ? 'Running...' : 'Run Workflow'}
-          </button>
-        </div>
-      </header>
-
-      {/* MAIN CONTENT AREA */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Central Canvas Area */}
-        <div className="flex-1 h-full w-full relative">
-          <ReactFlowProvider>
-            <WorkflowCanvas />
-          </ReactFlowProvider>
-        </div>
-
-        {/* Right Sidebar Panel - Collapsible */}
-        {showSidebar ? (
-          <div className="w-80 border-l border-zinc-200 bg-white flex flex-col shrink-0 z-20 shadow-sm text-zinc-900">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-100">
-              <div className="flex items-center gap-1.5">
-                <History className="w-4 h-4 text-purple-600" />
-                <span className="text-xs font-bold uppercase tracking-wider text-zinc-500">Run History</span>
-              </div>
-              <button
-                onClick={() => setShowSidebar(false)}
-                className="p-1 hover:bg-zinc-100 rounded transition-colors text-zinc-400 hover:text-zinc-655"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-thin scrollbar-thumb-zinc-200">
-              {runHistory.map((run) => (
-                <div key={run.id} className="bg-zinc-50/50 p-3 rounded-lg border border-zinc-200/80 flex flex-col gap-1 hover:border-zinc-300 hover:bg-zinc-50 transition-all">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[10px] font-bold bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 rounded-full">
-                      {run.status}
-                    </span>
-                    <span className="text-[11px] text-zinc-500 font-mono font-semibold">{run.duration}</span>
-                  </div>
-                  <div className="flex justify-between items-center mt-2 text-[10px]">
-                    <span className="text-zinc-500">Scope: {run.scope}</span>
-                    <span className="text-zinc-450 font-medium">{run.timestamp}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setShowSidebar(true)}
-            className="absolute top-4 right-4 z-20 w-8 h-8 bg-white border border-zinc-200 rounded-full flex items-center justify-center text-zinc-500 hover:text-zinc-800 hover:bg-zinc-50 shadow-md transition-all animate-fade-in"
-            title="Show Run History"
-          >
-            <History className="w-4 h-4" />
-          </button>
-        )}
       </div>
+
+      {/* ======== TOP-RIGHT FLOATING: Viewing live run... + Est + Bal + Play/Stop + Clock ======== */}
+      <div className="absolute top-3 right-3 z-30 flex items-center gap-2 pointer-events-auto">
+        {/* Viewing live run */}
+        <div className="bg-white/95 backdrop-blur-sm border border-zinc-200/80 rounded-lg shadow-sm px-3 py-1.5 flex items-center gap-2 text-xs text-zinc-500">
+          <span className={`w-2.5 h-2.5 rounded-full ${isExecuting ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-300'}`} />
+          <span className="font-medium">Viewing live run...</span>
+        </div>
+
+        {/* Estimated cost */}
+        <div className="bg-white/95 backdrop-blur-sm border border-zinc-200/80 rounded-lg shadow-sm px-3 py-1.5 flex items-center gap-1 text-xs text-zinc-500">
+          <span>Est</span>
+          <span className="font-semibold text-zinc-800">0.01 M</span>
+        </div>
+
+        {/* Balance */}
+        <div className="bg-white/95 backdrop-blur-sm border border-zinc-200/80 rounded-lg shadow-sm px-3 py-1.5 flex items-center gap-1 text-xs text-zinc-500">
+          <span>Bal</span>
+          <span className="font-semibold text-zinc-800">30.33 M</span>
+        </div>
+
+        {/* Play / Stop button — indigo-purple play, red stop with cross icon */}
+        <button
+          onClick={isExecuting ? handleStopWorkflow : () => handleRunWorkflow()}
+          className={`w-9 h-9 rounded-lg flex items-center justify-center shadow-sm transition-all duration-200 text-white ${isExecuting
+              ? 'bg-red-500 hover:bg-red-600'
+              : 'bg-indigo-600 hover:bg-indigo-700'
+            }`}
+          title={isExecuting ? 'Stop execution' : 'Run workflow'}
+        >
+          {isExecuting ? (
+            <X className="w-4 h-4 text-white stroke-[2.5]" />
+          ) : (
+            <Play className="w-3.5 h-3.5 text-white fill-white ml-0.5" />
+          )}
+        </button>
+
+        {/* Clock / Run History toggle */}
+        <button
+          onClick={() => setShowSidebar((v) => !v)}
+          className={`w-9 h-9 rounded-lg border shadow-sm flex items-center justify-center transition-colors ${showSidebar
+              ? 'bg-zinc-150 border-zinc-300 text-zinc-800'
+              : 'bg-white/95 backdrop-blur-sm border-zinc-200/80 text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700'
+            }`}
+          title="Run History"
+        >
+          <Clock className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* ======== NEW RUN DROPDOWN BUTTON (underneath the run button) ======== */}
+      <div className="absolute top-14 right-3 z-30 flex flex-col items-end pointer-events-auto">
+        <button
+          onClick={() => {
+            if (!isExecuting) {
+              handleRunWorkflow();
+            }
+          }}
+          disabled={isExecuting}
+          className="px-3 py-1.5 bg-white border border-zinc-200/80 hover:bg-zinc-50 text-[11px] font-semibold text-zinc-700 rounded-lg shadow-sm flex items-center gap-1.5 transition-colors disabled:opacity-50"
+        >
+          <Play className="w-2.5 h-2.5 fill-current text-zinc-500" />
+          New run
+        </button>
+      </div>
+      {showSidebar && (
+        <div className="absolute right-0 top-14 bottom-0 w-80 bg-white border-l border-t border-zinc-200 z-50 shadow-2xl flex flex-col font-sans select-none animate-slide-in">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3.5 border-b border-zinc-150">
+            <span className="text-sm font-bold text-zinc-800">Execution History</span>
+            <button
+              onClick={() => setShowSidebar(false)}
+              className="px-2.5 py-1 text-xs font-semibold border border-zinc-200 text-zinc-500 hover:bg-zinc-50 rounded-lg transition-colors cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+
+          {/* Runs list (Removed Tabs, showing UI Runs directly) */}
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {runHistory.filter((r) => r.triggerType === 'UI').length === 0 ? (
+              <div className="text-center py-16 text-xs text-zinc-400 italic">No execution history found.</div>
+            ) : (
+              runHistory
+                .filter((r) => r.triggerType === 'UI')
+                .map((run, index, filteredList) => {
+                  const runNum = filteredList.length - index;
+                  let dotColor = 'bg-zinc-300';
+                  if (run.status === 'SUCCESS') dotColor = 'bg-emerald-500';
+                  else if (run.status === 'FAILED') dotColor = 'bg-red-500';
+                  else if (run.status === 'RUNNING') dotColor = 'bg-orange-500 animate-pulse';
+
+                  const titleText = `Run #${runNum}`;
+                  const subtitleText = run.id.slice(0, 8);
+
+                  const isExpanded = expandedRunId === run.id || run.status === 'RUNNING';
+
+                  return (
+                    <div key={run.id} className="flex flex-col border-b border-zinc-100 last:border-none">
+                      <div
+                        onClick={() => setExpandedRunId(isExpanded ? null : run.id)}
+                        className="flex items-center justify-between px-3 py-2.5 hover:bg-zinc-50 rounded-lg cursor-pointer transition-colors group border border-transparent hover:border-zinc-150"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+                          <div className="flex flex-col">
+                            <span className="text-xs font-bold text-zinc-850">{titleText}</span>
+                            <span className="text-[10px] text-zinc-400 font-semibold font-mono">{subtitleText}</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end text-[10px] text-zinc-400 font-semibold font-mono">
+                          <span>{run.duration}</span>
+                          <span className="text-[9px] text-zinc-400 mt-0.5">{new Date(run.timestamp).toLocaleTimeString()}</span>
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <div className="px-7 pb-2.5 space-y-1.5 bg-zinc-50/50 rounded-b-lg border-t border-dashed border-zinc-100 pt-1.5 select-none animate-slide-in">
+                          {run.nodeExecutions && run.nodeExecutions.length > 0 ? (
+                            (() => {
+                              const typeOrder: Record<string, number> = {
+                                'requestInputs': 1,
+                                'cropImage': 2,
+                                'gemini': 3,
+                                'response': 4
+                              };
+                              return [...run.nodeExecutions]
+                                .sort((a, b) => (typeOrder[a.nodeName] || 99) - (typeOrder[b.nodeName] || 99))
+                                .map((exec: any) => {
+                                  let statusColor = 'text-zinc-400';
+                                  let statusDot = 'bg-zinc-300';
+                                  if (exec.status === 'SUCCESS') {
+                                    statusColor = 'text-emerald-600 font-semibold';
+                                    statusDot = 'bg-emerald-500';
+                                  } else if (exec.status === 'FAILED') {
+                                    statusColor = 'text-rose-600 font-semibold';
+                                    statusDot = 'bg-rose-500';
+                                  } else if (exec.status === 'RUNNING') {
+                                    statusColor = 'text-amber-600 font-bold animate-pulse';
+                                    statusDot = 'bg-amber-500 animate-pulse';
+                                  }
+
+                                  // Map internal names to friendly API call names
+                                  let friendlyName = exec.nodeName;
+                                  if (exec.nodeName === 'gemini') friendlyName = 'Trigger.dev Gemini API Call';
+                                  else if (exec.nodeName === 'cropImage') friendlyName = 'Trigger.dev Crop Task';
+                                  else if (exec.nodeName === 'requestInputs') friendlyName = 'Prisma DB / Fetch Inputs';
+                                  else if (exec.nodeName === 'response') friendlyName = 'Prisma DB / Write Output';
+
+                                  return (
+                                    <div key={exec.id} className="flex items-center justify-between text-[10px] text-zinc-500">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
+                                        <span className={statusColor}>{friendlyName}</span>
+                                      </div>
+                                      <span className="font-mono text-zinc-450">{exec.duration ? exec.duration.toFixed(1) + 's' : '0.0s'}</span>
+                                    </div>
+                                  );
+                                });
+                            })()
+                          ) : (
+                            <div className="text-[10px] text-zinc-400 italic">No steps logged.</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

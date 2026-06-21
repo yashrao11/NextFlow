@@ -4,14 +4,13 @@ import React, { useState, useMemo } from 'react';
 import { useReactFlow } from 'reactflow';
 import { useWorkflowStore } from '@/store/useWorkflowStore';
 import {
-  Plus,
   Search,
   Crop,
   Brain,
   Clock,
+  X,
 } from 'lucide-react';
 
-/** Defines the options schema for selectable node templates in the picker menu. */
 interface NodeOption {
   type: string;
   name: string;
@@ -20,51 +19,57 @@ interface NodeOption {
   icon: React.ReactNode;
 }
 
+interface NodePickerProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
 /**
  * NodePicker Component
- * Renders a floating search bar that allows users to pick, drag, and create
+ * Renders a floating popup panel that allows users to pick and create
  * new nodes onto the React Flow canvas workspace.
+ * Triggered externally via the + button in the bottom toolbar.
  */
-export default function NodePicker() {
-  const [isOpen, setIsOpen] = useState(false); // Controls search results overlay visibility
-  const [search, setSearch] = useState(''); // Holds current search query string
-  const { getViewport } = useReactFlow(); // Pulls viewport zoom/translation to calculate position coordinates
+export default function NodePicker({ isOpen, onClose }: NodePickerProps) {
+  const [search, setSearch] = useState('');
+  const { getViewport } = useReactFlow();
   const addNode = useWorkflowStore((state) => state.addNode);
   const saveStateToHistory = useWorkflowStore((state) => state.saveStateToHistory);
 
-  // Hardcoded list of available workflow node templates
-  const nodeOptions: NodeOption[] = useMemo(() => [
-    {
-      type: 'cropImage',
-      name: 'Crop Image',
-      description: 'Crop images using manual or dynamic coordinates',
-      category: 'Image',
-      icon: <Crop className="w-4 h-4 text-blue-500" />,
-    },
-    {
-      type: 'gemini',
-      name: 'Gemini 3.1 Pro',
-      description: 'Run inference prompts, vision models, and files with Gemini',
-      category: 'Others',
-      icon: <Brain className="w-4 h-4 text-purple-600" />,
-    },
-    {
-      type: 'cropImage',
-      name: 'Recent: Crop Image',
-      description: 'Quick add Crop Image node',
-      category: 'Recent',
-      icon: <Clock className="w-4 h-4 text-zinc-400" />,
-    },
-    {
-      type: 'gemini',
-      name: 'Recent: Gemini 3.1 Pro',
-      description: 'Quick add Gemini node',
-      category: 'Recent',
-      icon: <Clock className="w-4 h-4 text-zinc-400" />,
-    },
-  ], []);
+  const nodeOptions: NodeOption[] = useMemo(
+    () => [
+      {
+        type: 'cropImage',
+        name: 'Crop Image',
+        description: 'Crop images using manual or dynamic coordinates',
+        category: 'Image',
+        icon: <Crop className="w-4 h-4 text-blue-500" />,
+      },
+      {
+        type: 'gemini',
+        name: 'Gemini 3.1 Pro',
+        description: 'Run inference prompts, vision models, and files with Gemini',
+        category: 'Others',
+        icon: <Brain className="w-4 h-4 text-purple-600" />,
+      },
+      {
+        type: 'cropImage',
+        name: 'Recent: Crop Image',
+        description: 'Quick add Crop Image node',
+        category: 'Recent',
+        icon: <Clock className="w-4 h-4 text-zinc-400" />,
+      },
+      {
+        type: 'gemini',
+        name: 'Recent: Gemini 3.1 Pro',
+        description: 'Quick add Gemini node',
+        category: 'Recent',
+        icon: <Clock className="w-4 h-4 text-zinc-400" />,
+      },
+    ],
+    []
+  );
 
-  // Filter options based on user text query
   const filteredOptions = useMemo(() => {
     return nodeOptions.filter(
       (opt) =>
@@ -83,30 +88,24 @@ export default function NodePicker() {
 
   /**
    * Spawns a new node onto the center of the canvas viewport.
-   * Resolves flow coordinates dynamically based on the current translation offsets (x, y) and zoom factor.
    */
   const handleSpawnNode = (type: string) => {
-    saveStateToHistory(); // Backup state in history for undo/redo
+    saveStateToHistory();
 
-    // 1. Calculate the center of the viewport in flow units
     const { x, y, zoom } = getViewport();
     const flowX = (-x + window.innerWidth / 2) / zoom;
     const flowY = (-y + window.innerHeight / 2) / zoom;
 
     const cleanType = type.replace('Recent: ', '');
-    const id = `${cleanType}-${Date.now()}`;
+    const nodeId = `${cleanType}-${Date.now()}`;
 
-    // 2. Build default node blueprint structure
     let newNode: any = {
-      id,
+      id: nodeId,
       type: cleanType,
-      position: { x: flowX, y: flowY },
-      data: {
-        isRunning: false,
-      },
+      position: { x: flowX - 160, y: flowY - 100 },
+      data: { isRunning: false },
     };
 
-    // 3. Setup default parameters based on Clean type
     if (cleanType === 'cropImage') {
       newNode.data.crop = { x: 0, y: 0, width: 100, height: 100 };
     } else if (cleanType === 'gemini') {
@@ -119,93 +118,80 @@ export default function NodePicker() {
     }
 
     addNode(newNode);
-    setIsOpen(false);
+    onClose();
     setSearch('');
   };
 
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
-      {/* Search results overlay menu */}
-      {isOpen && (
-        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-white border border-zinc-200 rounded-xl p-4 w-96 shadow-xl flex flex-col gap-4 max-h-[380px] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-200 text-zinc-900">
-          <div className="flex items-center gap-2 border-b border-zinc-100 pb-2">
-            <Search className="w-4 h-4 text-zinc-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search nodes..."
-              className="bg-transparent border-none outline-none text-xs text-zinc-800 placeholder-zinc-400 w-full"
-              autoFocus
-            />
-          </div>
+    <>
+      {/* Backdrop to close on outside click */}
+      <div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+      />
 
-          <div className="space-y-4">
-            {categories.map((cat) => {
-              const catOpts = filteredOptions.filter((opt) => opt.category === cat);
-              if (catOpts.length === 0) return null;
-
-              return (
-                <div key={cat} className="space-y-1.5">
-                  <span className="text-[9px] text-zinc-450 font-bold tracking-wider uppercase pl-1">
-                    {cat}
-                  </span>
-                  <div className="grid grid-cols-1 gap-1">
-                    {catOpts.map((opt) => (
-                      <button
-                        key={`${opt.category}-${opt.name}`}
-                        onClick={() => handleSpawnNode(opt.type)}
-                        className="flex items-start gap-3 p-2 hover:bg-zinc-50 border border-transparent hover:border-zinc-150 rounded-lg text-left transition-all"
-                      >
-                        <div className="p-1.5 bg-zinc-50 rounded border border-zinc-150">
-                          {opt.icon}
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-xs font-semibold text-zinc-800">{opt.name}</span>
-                          <span className="text-[10px] text-zinc-500">{opt.description}</span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-
-            {filteredOptions.length === 0 && (
-              <div className="text-center py-6 text-xs text-zinc-450">
-                No matching nodes found.
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Floating Bottom Search Bar Wrapper */}
-      <div className="bg-white/90 backdrop-blur-md border border-zinc-200 rounded-full px-4 py-2 shadow-xl flex items-center justify-between gap-3 w-80">
-        <div className="flex items-center gap-2 flex-1">
-          <Search className="w-4.5 h-4.5 text-zinc-400" />
+      {/* Node picker popup — centered bottom */}
+      <div className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 bg-white border border-zinc-200 rounded-xl shadow-2xl w-[400px] flex flex-col max-h-[420px] overflow-hidden animate-fade-in-up">
+        {/* Search header */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-100">
+          <Search className="w-4 h-4 text-zinc-400 shrink-0" />
           <input
             type="text"
-            placeholder="Add node to canvas..."
-            onClick={() => setIsOpen(true)}
             value={search}
-            onChange={(e) => {
-              setIsOpen(true);
-              setSearch(e.target.value);
-            }}
-            className="bg-transparent border-none outline-none text-xs text-zinc-800 placeholder-zinc-400 w-full"
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search nodes..."
+            className="bg-transparent border-none outline-none text-sm text-zinc-800 placeholder-zinc-400 w-full"
+            autoFocus
           />
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-zinc-100 rounded text-zinc-400 hover:text-zinc-600 transition-colors shrink-0"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
-        <button
-          onClick={() => setIsOpen(!isOpen)}
-          className={`w-7 h-7 bg-purple-600 hover:bg-purple-500 text-white rounded-full flex items-center justify-center transition-all duration-350 cursor-pointer shadow-md hover:shadow-purple-600/10 ${
-            isOpen ? 'rotate-45 bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 text-zinc-500' : ''
-          }`}
-        >
-          <Plus className="w-4 h-4" />
-        </button>
+
+        {/* Node options list */}
+        <div className="overflow-y-auto flex-1 p-3 space-y-4">
+          {categories.map((cat) => {
+            const catOpts = filteredOptions.filter((opt) => opt.category === cat);
+            if (catOpts.length === 0) return null;
+
+            return (
+              <div key={cat} className="space-y-1">
+                <span className="text-[10px] text-zinc-400 font-bold tracking-wider uppercase px-1 block">
+                  {cat}
+                </span>
+                <div className="space-y-0.5">
+                  {catOpts.map((opt) => (
+                    <button
+                      key={`${opt.category}-${opt.name}`}
+                      onClick={() => handleSpawnNode(opt.type)}
+                      className="w-full flex items-start gap-3 px-2.5 py-2.5 hover:bg-zinc-50 border border-transparent hover:border-zinc-150 rounded-lg text-left transition-all group"
+                    >
+                      <div className="p-1.5 bg-zinc-50 group-hover:bg-white rounded-md border border-zinc-150 shrink-0">
+                        {opt.icon}
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-sm font-semibold text-zinc-800 truncate">{opt.name}</span>
+                        <span className="text-[11px] text-zinc-500 leading-relaxed mt-0.5">{opt.description}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+
+          {filteredOptions.length === 0 && (
+            <div className="text-center py-8 text-sm text-zinc-400">
+              No matching nodes found.
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
-

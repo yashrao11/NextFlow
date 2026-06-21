@@ -11,6 +11,8 @@ const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/api/clerk-webhook(.*)',
+  '/api/workflows/run(.*)',
+  '/api/runs(.*)',
 ]);
 
 /**

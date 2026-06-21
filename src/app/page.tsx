@@ -87,6 +87,34 @@ export default function WorkflowsDashboard() {
 
   useEffect(() => {
     fetchWorkflows();
+
+    // Background polling for workflows list status updates (updates badge from Running -> Idle)
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/workflows');
+        if (res.ok) {
+          const data = await res.json();
+          setWorkflows((prev) => {
+            // Only update workflows if list changes or status/runs change to minimize rerenders
+            const isDifferent = data.length !== prev.length || data.some((w: any, idx: number) => {
+              const oldWf = prev[idx];
+              if (!oldWf) return true;
+              return w.id !== oldWf.id || 
+                     w.lastEdited !== oldWf.lastEdited ||
+                     w.runs?.[0]?.status !== oldWf.runs?.[0]?.status;
+            });
+            if (isDifferent) {
+              return data;
+            }
+            return prev;
+          });
+        }
+      } catch (err) {
+        console.error('Failed to background poll workflows list:', err);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
   }, []);
 
   /**

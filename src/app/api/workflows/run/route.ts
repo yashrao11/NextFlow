@@ -45,7 +45,11 @@ function getAncestors(startNodeId: string, edges: any[]): Set<string> {
  * @param fallbackTask Callback execution if API polling fails or keys are missing.
  * @returns The resolved output of the completed task.
  */
-async function pollTriggerRun(runId: string, fallbackTask: () => Promise<any>): Promise<any> {
+async function pollTriggerRun(
+  triggerRunId: string, 
+  dbRunId: string, 
+  fallbackTask: () => Promise<any>
+): Promise<any> {
   const apiKey = process.env.TRIGGER_API_KEY;
 
   // If Trigger.dev credentials are missing or unconfigured, execute task locally as fallback
@@ -54,14 +58,28 @@ async function pollTriggerRun(runId: string, fallbackTask: () => Promise<any>): 
     return await fallbackTask();
   }
 
-  const isDev = process.env.NODE_ENV === 'development';
-  const maxAttempts = isDev ? 4 : 30;
-  const delayMs = isDev ? 1000 : 3000;
+  // Increased attempts to allow for mandatory 30-second delay tasks
+  const maxAttempts = 40; 
+  const delayMs = 2000;
 
   // Poll status periodically until completion or failure
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const run = await runs.retrieve(runId);
+      // Check if the database run was aborted by the user
+      const dbRun = await prisma.run.findUnique({
+        where: { id: dbRunId },
+        select: { status: true }
+      });
+      if (dbRun && dbRun.status === 'FAILED') {
+        try {
+          await runs.cancel(triggerRunId);
+        } catch (cancelErr) {
+          console.warn(`[Run Poller] Failed to cancel Trigger.dev run ${triggerRunId}:`, cancelErr);
+        }
+        throw new Error('Task execution aborted: Run stopped by user.');
+      }
+
+      const run = await runs.retrieve(triggerRunId);
 
       if (run) {
         if (run.status === 'COMPLETED') {
@@ -75,7 +93,10 @@ async function pollTriggerRun(runId: string, fallbackTask: () => Promise<any>): 
           throw new Error(`Trigger.dev task run failed: ${run.status}`);
         }
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err.message?.includes('aborted')) {
+        throw err;
+      }
       console.warn(`[Run Poller] Polling attempt ${attempt + 1} failed:`, err);
     }
     await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -91,10 +112,9 @@ async function pollTriggerRun(runId: string, fallbackTask: () => Promise<any>): 
  * Simulates a background worker execution with a mandatory 30-second sleep.
  */
 async function localCropFallback(imageUrl: string, x: number, y: number, width: number, height: number): Promise<any> {
-  // Simulate heavy computation delay
-  await new Promise((resolve) => setTimeout(resolve, 30000));
-
   console.log("[DEBUG] Local fallback: Starting crop using Jimp.", { imageUrl: imageUrl.substring(0, 50), x, y, width, height });
+  // Mandatory 30-second artificial delay to simulate a complex background job
+  await new Promise((resolve) => setTimeout(resolve, 30000));
   try {
     let inputBuffer: Buffer | string = imageUrl;
     if (imageUrl.startsWith("data:image/")) {
@@ -328,8 +348,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       if (parentOutput.imageUrl) {
         imgUrl = parentOutput.imageUrl;
       } else if (parentOutput.fields) {
-        const fieldId = edge.sourceHandle?.split('-')[0] || '';
-        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
         imgUrl = field?.value || '';
       }
       if (imgUrl) inputs.images.push(imgUrl);
@@ -338,8 +357,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       if (parentOutput.video) {
         videoVal = parentOutput.video;
       } else if (parentOutput.fields) {
-        const fieldId = edge.sourceHandle?.split('-')[0] || '';
-        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
         videoVal = field?.value || null;
       } else if (parentOutput.result) {
         videoVal = parentOutput.result;
@@ -352,8 +370,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       if (parentOutput.audio) {
         audioVal = parentOutput.audio;
       } else if (parentOutput.fields) {
-        const fieldId = edge.sourceHandle?.split('-')[0] || '';
-        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
         audioVal = field?.value || null;
       } else if (parentOutput.result) {
         audioVal = parentOutput.result;
@@ -366,8 +383,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       if (parentOutput.file) {
         fileVal = parentOutput.file;
       } else if (parentOutput.fields) {
-        const fieldId = edge.sourceHandle?.split('-')[0] || '';
-        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
         fileVal = field?.value || null;
       } else if (parentOutput.result) {
         fileVal = parentOutput.result;
@@ -382,8 +398,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       } else if (parentOutput.result) {
         textVal = parentOutput.result;
       } else if (parentOutput.fields) {
-        const fieldId = edge.sourceHandle?.split('-')[0] || '';
-        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
         textVal = field?.value || '';
       }
 
@@ -399,8 +414,7 @@ async function resolveNodeInputs(node: any, runId: string, edges: any[]): Promis
       } else if (parentOutput.imageUrl) {
         resultVal = parentOutput.imageUrl;
       } else if (parentOutput.fields) {
-        const fieldId = edge.sourceHandle?.split('-')[0] || '';
-        const field = parentOutput.fields.find((f: any) => f.id.startsWith(fieldId));
+        const field = parentOutput.fields.find((f: any) => edge.sourceHandle && edge.sourceHandle.startsWith(f.id));
         resultVal = field?.value || '';
       }
       inputs.result = resultVal;
@@ -423,6 +437,16 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
 
   try {
     while (true) {
+      // Check if the database run itself has been set to FAILED (manually stopped)
+      const currentRun = await prisma.run.findUnique({
+        where: { id: runId },
+        select: { status: true }
+      });
+      if (currentRun && currentRun.status === 'FAILED') {
+        console.log(`[Orchestrator Run ${runId}] Run aborted by user in database.`);
+        break;
+      }
+
       // 1. Fetch current status of node executions in this run
       const executions = await prisma.nodeExecution.findMany({
         where: { runId },
@@ -431,6 +455,19 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
       // Break if all scope nodes have finished processing (either success or failed)
       const finished = executions.filter((e) => e.status === 'SUCCESS' || e.status === 'FAILED');
       if (finished.length === executions.length) {
+        break;
+      }
+
+      // Stop workflow execution immediately if the response node has finished
+      const responseExec = executions.find((e) => e.nodeName === 'response');
+      if (responseExec && (responseExec.status === 'SUCCESS' || responseExec.status === 'FAILED')) {
+        const pendingCount = executions.filter((e) => e.status === 'PENDING').length;
+        if (pendingCount > 0) {
+          await prisma.nodeExecution.updateMany({
+            where: { runId, status: 'PENDING' },
+            data: { status: 'FAILED', errorMessage: 'Skipped because workflow already completed.' },
+          });
+        }
         break;
       }
 
@@ -458,6 +495,20 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
         if (allParentsSuccess) {
           readyExecutions.push(ex);
         }
+      }
+
+      // Check if we can make any further progress:
+      // If there are no active nodes currently running and no ready nodes to launch,
+      // it means we are stuck (e.g. due to unsatisfied dependencies on skipped nodes).
+      if (activeNodeIds.size === 0 && readyExecutions.length === 0) {
+        const pendingCount = executions.filter((e) => e.status === 'PENDING').length;
+        if (pendingCount > 0) {
+          await prisma.nodeExecution.updateMany({
+            where: { runId, status: 'PENDING' },
+            data: { status: 'FAILED', errorMessage: 'Skipped due to unsatisfied dependencies.' },
+          });
+        }
+        break;
       }
 
       // 3. Launch ready nodes concurrently
@@ -502,7 +553,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
               });
 
               // Poll status or fall back to local execution
-              output = await pollTriggerRun(triggerRun.id, () =>
+              output = await pollTriggerRun(triggerRun.id, runId, () =>
                 localCropFallback(imageUrl, crop.x, crop.y, crop.width, crop.height)
               );
             } else if (node.type === 'gemini') {
@@ -537,7 +588,7 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
               const triggerRun = await tasks.trigger('gemini-prompt', triggerPayload);
 
               // Poll status or fall back to local execution
-              output = await pollTriggerRun(triggerRun.id, () =>
+              output = await pollTriggerRun(triggerRun.id, runId, () =>
                 localGeminiFallback(
                   prompt,
                   systemPrompt,
@@ -618,7 +669,7 @@ export async function POST(req: Request) {
   try {
     // 1. Parse trigger body parameters
     const body = await req.json();
-    const { workflowId, nodeId, scope = 'FULL' } = body;
+    const { workflowId, nodeId, scope = 'FULL', triggerType = 'API' } = body;
 
     if (!workflowId) {
       return NextResponse.json({ error: 'workflowId is required' }, { status: 400 });
@@ -652,6 +703,7 @@ export async function POST(req: Request) {
         status: 'RUNNING',
         duration: 0,
         scope: scope,
+        triggerType,
       },
     });
 

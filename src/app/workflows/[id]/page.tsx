@@ -66,6 +66,24 @@ export default function WorkflowBuilderPage() {
   const activeUiRunIdRef = useRef<string | null>(null);
   const isStartingRunRef = useRef(false);
   const pollingRunIdRef = useRef<string | null>(null);
+  // Tracks run IDs manually stopped by user — prevents background poller from re-activating them
+  const manuallyStoppedRunIdsRef = useRef<Set<string>>(new Set());
+  const isExecutingRef = useRef(false);
+  const isTriggeringRef = useRef(false);
+
+  // Compute active running run selector variables for stable polling dependencies
+  const activeRun = runHistory.find((r) => r.status === 'RUNNING' && !manuallyStoppedRunIdsRef.current.has(r.id));
+  const activeRunId = activeRun?.id || null;
+  const activeRunStatus = activeRun?.status || null;
+
+  const isRunning = useWorkflowStore((state) => state.isRunning);
+  const startPolling = useWorkflowStore((state) => state.startPolling);
+  const stopPolling = useWorkflowStore((state) => state.stopPolling);
+
+  useEffect(() => {
+    setIsExecuting(isRunning);
+    isExecutingRef.current = isRunning;
+  }, [isRunning]);
 
   // --- INITIALIZE & LOAD CANVAS DATA ---
   useEffect(() => {
@@ -137,7 +155,7 @@ export default function WorkflowBuilderPage() {
             const runningUiRun = history.find((r: any) => r.triggerType === 'UI' && r.status === 'RUNNING');
             if (runningUiRun) {
               activeUiRunIdRef.current = runningUiRun.id;
-              setIsExecuting(true);
+              useWorkflowStore.getState().startPolling(runningUiRun.id);
               pollActiveRef.current = true;
             } else {
               // Fallback: if no UI runs are running, check if latest run is RUNNING (could be API)
@@ -146,7 +164,7 @@ export default function WorkflowBuilderPage() {
                 if (latestRun.triggerType === 'UI') {
                   activeUiRunIdRef.current = latestRun.id;
                 }
-                setIsExecuting(true);
+                useWorkflowStore.getState().startPolling(latestRun.id);
                 pollActiveRef.current = true;
               }
             }
@@ -195,13 +213,16 @@ export default function WorkflowBuilderPage() {
           const data = await res.json();
           if (data.runs && Array.isArray(data.runs)) {
             const history: RunHistoryItem[] = data.runs.map((r: any) => {
-              const isRunning = r.status === 'RUNNING';
+              // If this run was manually stopped, always show it as FAILED regardless of server state
+              const wasManuallyStopped = manuallyStoppedRunIdsRef.current.has(r.id);
+              const effectiveStatus = wasManuallyStopped && r.status === 'RUNNING' ? 'FAILED' : r.status;
+              const isRunning = effectiveStatus === 'RUNNING';
               const durationStr = isRunning
                 ? (Math.max(0, Date.now() - new Date(r.timestamp).getTime()) / 1000).toFixed(1) + 's'
                 : r.duration.toFixed(1) + 's';
               return {
                 id: r.id,
-                status: r.status as 'SUCCESS' | 'FAILED' | 'RUNNING',
+                status: effectiveStatus as 'SUCCESS' | 'FAILED' | 'RUNNING',
                 duration: durationStr,
                 timestamp: r.timestamp,
                 scope: r.scope,
@@ -209,40 +230,82 @@ export default function WorkflowBuilderPage() {
                 nodeExecutions: r.nodeExecutions || [],
               };
             });
-            
-            // Make sure the active local UI run is preserved if it's not on the server yet
-            let updatedHistory = history;
-            if (activeUiRunIdRef.current && !history.some((r: any) => r.id === activeUiRunIdRef.current)) {
-              const localActiveRun = runHistory.find((r: any) => r.id === activeUiRunIdRef.current);
-              if (localActiveRun) {
-                updatedHistory = [localActiveRun, ...history];
-              }
-            }
 
             setRunHistory((prev) => {
-              // Only update if there are status or count changes to preserve active polling durations
-              const isDifferent = updatedHistory.length !== prev.length || updatedHistory.some((h, i) => prev[i]?.id !== h.id || prev[i]?.status !== h.status);
+              // Construct the updated history by merging server items with existing client ticking states
+              const mergedHistory = history.map((serverRun) => {
+                const existingRun = prev.find((r) => r.id === serverRun.id);
+                if (serverRun.status === 'RUNNING' && existingRun) {
+                  // Merge node executions to preserve local ticking durations of running nodes
+                  const mergedExecutions = serverRun.nodeExecutions?.map((serverExec: any) => {
+                    const existingExec = existingRun.nodeExecutions?.find((e: any) => e.id === serverExec.id);
+                    if (serverExec.status === 'RUNNING' && existingExec) {
+                      return {
+                        ...serverExec,
+                        duration: existingExec.duration,
+                      };
+                    }
+                    return serverExec;
+                  });
+
+                  return {
+                    ...serverRun,
+                    duration: existingRun.duration,
+                    nodeExecutions: mergedExecutions || serverRun.nodeExecutions,
+                  };
+                }
+                return serverRun;
+              });
+
+              // Make sure the active local UI run is preserved if it's not on the server list yet
+              let finalHistory = mergedHistory;
+              if (activeUiRunIdRef.current && !mergedHistory.some((r) => r.id === activeUiRunIdRef.current)) {
+                const localActiveRun = prev.find((r) => r.id === activeUiRunIdRef.current);
+                if (localActiveRun) {
+                  finalHistory = [localActiveRun, ...mergedHistory];
+                }
+              }
+
+              // Check if anything is different to avoid rendering thrash
+              const isDifferent = finalHistory.length !== prev.length || finalHistory.some((h, i) => {
+                const p = prev[i];
+                if (!p) return true;
+                if (p.id !== h.id || p.status !== h.status) return true;
+                if (p.status !== 'RUNNING' && p.duration !== h.duration) return true;
+                if (p.nodeExecutions?.length !== h.nodeExecutions?.length) return true;
+                return p.nodeExecutions?.some((pe: any, idx: number) => {
+                  const he = h.nodeExecutions?.[idx];
+                  return !he || pe.id !== he.id || pe.status !== he.status;
+                });
+              });
+
               if (isDifferent) {
-                return updatedHistory;
+                return finalHistory;
               }
               return prev;
             });
 
-            // Update active run reference if server reports completion
-            const activeUiRunOnServer = history.find((r: any) => r.id === activeUiRunIdRef.current);
-
             if (isStartingRunRef.current) {
-              // Triggering in progress, keep UI run indicator active
-              setIsExecuting(true);
               pollActiveRef.current = true;
             } else {
-              // Sync isExecuting and pollActiveRef with the active UI run
               if (activeUiRunIdRef.current) {
-                setIsExecuting(true);
+                if (!useWorkflowStore.getState().isRunning) {
+                  useWorkflowStore.getState().startPolling(activeUiRunIdRef.current);
+                }
                 pollActiveRef.current = true;
               } else {
-                setIsExecuting(false);
-                pollActiveRef.current = false;
+                // Sync with any running run in history
+                const activeRunningRun = history.find((r) => r.status === 'RUNNING' && !manuallyStoppedRunIdsRef.current.has(r.id));
+                if (activeRunningRun) {
+                  activeUiRunIdRef.current = activeRunningRun.id;
+                  useWorkflowStore.getState().startPolling(activeRunningRun.id);
+                  pollActiveRef.current = true;
+                } else {
+                  if (useWorkflowStore.getState().isRunning) {
+                    useWorkflowStore.getState().stopPolling();
+                  }
+                  pollActiveRef.current = false;
+                }
               }
             }
           }
@@ -287,98 +350,79 @@ export default function WorkflowBuilderPage() {
   }, []);
 
   // --- POLL RUNNING RUN DETAILS (FOR LIVE CANVAS HIGHLIGHTS) ---
+  // Only fires for actively RUNNING executions. Never overwrites canvas state for completed/failed runs
+  // to avoid flickering node outputs on page load.
   useEffect(() => {
-    if (!id || id === 'new' || runHistory.length === 0) return;
-    const activeRun = runHistory.find((r: any) => r.triggerType === 'UI' && r.status === 'RUNNING')
-      || runHistory.find((r: any) => r.triggerType === 'UI')
-      || runHistory[0];
+    if (!id || id === 'new' || !activeRunId) return;
 
-    if (!activeRun) return;
-    const runId = activeRun.id;
-    const runStatus = activeRun.status;
+    const runId = activeRunId;
+    const runStatus = activeRunStatus;
 
-    const wasProcessed = lastProcessedRunRef.current?.id === runId && lastProcessedRunRef.current?.status === runStatus;
-    if (wasProcessed && runStatus !== 'RUNNING') {
+    // Guard against duplicate polling loops for the same run
+    if (pollingRunIdRef.current === runId) {
       return;
     }
-
-    if (runStatus === 'RUNNING') {
-      if (pollingRunIdRef.current === runId) {
-        return; // Guard to prevent restarting the polling loop on every ticker tick
-      }
-      pollingRunIdRef.current = runId;
-    } else {
-      pollingRunIdRef.current = null;
-    }
+    pollingRunIdRef.current = runId;
 
     let active = true;
 
     const fetchDetails = async () => {
       try {
         const res = await fetch(`/api/runs/${runId}`);
+        if (!active || manuallyStoppedRunIdsRef.current.has(runId)) {
+          return;
+        }
+
         if (res.ok) {
           const runState = await res.json();
+          if (!active || manuallyStoppedRunIdsRef.current.has(runId)) {
+            return;
+          }
+
           const executions = runState.nodeExecutions || [];
 
-          const liveNodes = useWorkflowStore.getState().nodes;
-          const liveEdges = useWorkflowStore.getState().edges;
+          // 2. Update runHistory and execution state
+          const runFinished = runState.status === 'SUCCESS' || runState.status === 'FAILED';
+          if (runFinished) {
+            setIsExecuting(false);
+            isExecutingRef.current = false;
+            activeUiRunIdRef.current = null;
+            pollActiveRef.current = false;
+            active = false; // Stop the polling loop
 
-          const updatedNodes = liveNodes.map((node) => {
-            const exec = executions.find((e: any) => e.nodeId === node.id);
-            if (!exec) return node;
+            const finalDuration = runState.duration.toFixed(1) + 's';
+            setRunHistory((prev) =>
+              prev.map((item) =>
+                item.id === runId
+                  ? { ...item, status: runState.status, duration: finalDuration, nodeExecutions: executions }
+                  : item
+              )
+            );
+          } else {
+            // Run is still running: update node executions and preserve local ticking duration
+            setRunHistory((prev) =>
+              prev.map((item) => {
+                if (item.id === runId) {
+                  // Merge: preserve local ticked duration for any RUNNING nodes
+                  const mergedExecutions = executions.map((serverExec: any) => {
+                    const existingExec = item.nodeExecutions?.find((e: any) => e.id === serverExec.id);
+                    if (serverExec.status === 'RUNNING' && existingExec) {
+                      return {
+                        ...serverExec,
+                        duration: existingExec.duration,
+                      };
+                    }
+                    return serverExec;
+                  });
 
-            if (exec.status === 'RUNNING') {
-              return { ...node, data: { ...node.data, isRunning: true } };
-            } else if (exec.status === 'SUCCESS') {
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  isRunning: false,
-                  duration: exec.duration,
-                  ...(node.type === 'gemini' && { response: exec.output?.response || '' }),
-                  ...(node.type === 'cropImage' && { output: exec.output || {} }),
-                  ...(node.type === 'response' && { result: exec.output?.result || '' }),
-                  ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
+                  return {
+                    ...item,
+                    nodeExecutions: mergedExecutions,
+                  };
                 }
-              };
-            } else if (exec.status === 'FAILED') {
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  isRunning: false,
-                  duration: exec.duration,
-                  error: exec.errorMessage || 'Execution failed'
-                }
-              };
-            }
-            return node;
-          });
-
-          const updatedEdges = liveEdges.map((e) => {
-            const sourceExec = executions.find((ex: any) => ex.nodeId === e.source);
-            const targetExec = executions.find((ex: any) => ex.nodeId === e.target);
-            const isEdgeActive = sourceExec?.status === 'SUCCESS' && (targetExec?.status === 'RUNNING' || targetExec?.status === 'PENDING');
-            return { ...e, data: { isRunning: isEdgeActive } };
-          });
-
-          useWorkflowStore.setState({
-            nodes: updatedNodes,
-            edges: updatedEdges,
-          });
-
-          // Update the run's nodeExecutions inside runHistory state so steps update live in Execution History drawer
-          setRunHistory((prev) =>
-            prev.map((item) =>
-              item.id === runId
-                ? { ...item, nodeExecutions: executions }
-                : item
-            )
-          );
-
-          if (runStatus !== 'RUNNING') {
-            lastProcessedRunRef.current = { id: runId, status: runStatus };
+                return item;
+              })
+            );
           }
         }
       } catch (err) {
@@ -391,7 +435,7 @@ export default function WorkflowBuilderPage() {
         if (!active) return;
         await fetchDetails();
         if (active) {
-          setTimeout(poll, 1500);
+          setTimeout(poll, 800);
         }
       };
       poll();
@@ -399,11 +443,8 @@ export default function WorkflowBuilderPage() {
         active = false;
         pollingRunIdRef.current = null;
       };
-    } else {
-      fetchDetails();
-      lastProcessedRunRef.current = { id: runId, status: runStatus };
     }
-  }, [runHistory, id]);
+  }, [activeRunId, activeRunStatus, id]);
 
   // --- RENAME HANDLERS ---
   const handleStartRename = () => { setTempName(name); setIsEditingName(true); };
@@ -445,12 +486,26 @@ export default function WorkflowBuilderPage() {
 
   // --- STOP WORKFLOW ---
   const handleStopWorkflow = async () => {
-    pollActiveRef.current = false;
-    setIsExecuting(false);
+    // Stop Zustand store polling
+    useWorkflowStore.getState().stopPolling();
 
-    const runIdToAbort = activeUiRunIdRef.current;
+    // Immediately kill the polling loop and reset all start/run refs
+    pollActiveRef.current = false;
+    isStartingRunRef.current = false;  // Prevent background poller from re-enabling isExecuting
+    setIsExecuting(false);
+    isExecutingRef.current = false;
+
+    let runIdToAbort = activeUiRunIdRef.current;
+    if (!runIdToAbort) {
+      // Find the first running run in the history
+      const runningRun = runHistory.find((r) => r.status === 'RUNNING');
+      if (runningRun) {
+        runIdToAbort = runningRun.id;
+      }
+    }
     activeUiRunIdRef.current = null;
 
+    // Clear canvas node running states immediately
     const currentNodes = useWorkflowStore.getState().nodes;
     currentNodes.forEach((n) => updateNodeData(n.id, { isRunning: false }));
 
@@ -460,7 +515,11 @@ export default function WorkflowBuilderPage() {
     });
 
     if (runIdToAbort) {
-      // Optimistically update runHistory immediately so the history UI stops running instantly!
+      // Register run as manually stopped BEFORE any state updates
+      // This ensures the background poller never re-activates it
+      manuallyStoppedRunIdsRef.current.add(runIdToAbort);
+
+      // Optimistically update runHistory immediately so the history UI stops running instantly
       setRunHistory((prev) =>
         prev.map((item) =>
           item.id === runIdToAbort
@@ -477,6 +536,11 @@ export default function WorkflowBuilderPage() {
         )
       );
 
+      // Clean up the stopped run ID after a delay once server has updated
+      setTimeout(() => {
+        manuallyStoppedRunIdsRef.current.delete(runIdToAbort);
+      }, 10000);
+
       try {
         await fetch(`/api/runs/${runIdToAbort}`, {
           method: 'PATCH',
@@ -490,14 +554,25 @@ export default function WorkflowBuilderPage() {
   };
 
   // --- RUN WORKFLOW ---
-  const handleRunWorkflow = async (targetNodeId?: string) => {
-    if (isExecuting) return;
+  const handleRunWorkflow = async (
+    e?: React.MouseEvent | string,
+    targetNodeId?: string
+  ) => {
+    if (e && typeof e !== 'string' && 'stopPropagation' in e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
+    if (isRunning || isTriggeringRef.current || isExecutingRef.current) return;
+
+    const actualTargetNodeId = typeof e === 'string' ? e : targetNodeId;
+
+    isExecutingRef.current = true;
     isStartingRunRef.current = true;
     setIsExecuting(true);
     pollActiveRef.current = true;
 
-    const startTime = Date.now();
-    const scope = targetNodeId ? 'PARTIAL' : 'FULL';
+    const scope = actualTargetNodeId ? 'PARTIAL' : 'FULL';
 
     // Clear execution states and mark starting node immediately
     const currentNodes = useWorkflowStore.getState().nodes;
@@ -506,30 +581,52 @@ export default function WorkflowBuilderPage() {
     });
 
     const startNode = currentNodes.find(n => n.id === 'request-inputs' || n.type === 'requestInputs');
-    if (startNode && !targetNodeId) {
+    if (startNode && !actualTargetNodeId) {
       updateNodeData(startNode.id, { isRunning: true });
-    } else if (targetNodeId) {
-      updateNodeData(targetNodeId, { isRunning: true });
+    } else if (actualTargetNodeId) {
+      updateNodeData(actualTargetNodeId, { isRunning: true });
     }
 
     try {
+      isTriggeringRef.current = true;
       const currentEdges = useWorkflowStore.getState().edges;
-      const saveRes = await fetch(`/api/workflows/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, nodes: currentNodes, edges: currentEdges }),
-      });
-      if (!saveRes.ok) throw new Error('Failed to auto-save workflow state before execution');
+
+      if (!actualTargetNodeId) {
+        // FULL run: auto-save to capture the latest field values and any newly uploaded images.
+        // This is blocking so the orchestrator reads the freshest workflow state.
+        const saveRes = await fetch(`/api/workflows/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, nodes: currentNodes, edges: currentEdges }),
+        });
+        if (!saveRes.ok) throw new Error('Failed to auto-save workflow state before execution');
+      }
 
       const res = await fetch('/api/workflows/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflowId: id, nodeId: targetNodeId, scope, triggerType: 'UI' }),
+        body: JSON.stringify({ workflowId: id, nodeId: actualTargetNodeId, scope, triggerType: 'UI' }),
       });
       if (!res.ok) throw new Error('Failed to start workflow execution');
 
+
       const runResponse = await res.json();
       const runId = runResponse.runId;
+
+      // If stop was pressed while the launch API call was in-flight, bail out cleanly
+      if (!pollActiveRef.current) {
+        isStartingRunRef.current = false;
+        // Mark the newly created server run as stopped
+        manuallyStoppedRunIdsRef.current.add(runId);
+        setTimeout(() => manuallyStoppedRunIdsRef.current.delete(runId), 10000);
+        fetch(`/api/runs/${runId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'FAILED' }),
+        }).catch(() => {});
+        return;
+      }
+
       activeUiRunIdRef.current = runId;
 
       // Add to runHistory immediately with RUNNING status
@@ -544,149 +641,17 @@ export default function WorkflowBuilderPage() {
       setRunHistory((prev) => [initialRunItem, ...prev]);
 
       isStartingRunRef.current = false;
-
-      const poll = async () => {
-        if (!pollActiveRef.current) return;
-        try {
-          const statusRes = await fetch(`/api/runs/${runId}`);
-          if (!statusRes.ok) {
-            if (pollActiveRef.current) setTimeout(poll, 800);
-            return;
-          }
-
-          const runState = await statusRes.json();
-          if (!pollActiveRef.current) return;
-
-          // Update running history item duration and status in real-time
-          if (runState.status === 'SUCCESS' || runState.status === 'FAILED') {
-            pollActiveRef.current = false;
-            setIsExecuting(false);
-            activeUiRunIdRef.current = null;
-
-            // Use accurate database duration on completion
-            const finalDuration = runState.duration.toFixed(1) + 's';
-            setRunHistory((prev) =>
-              prev.map((item) =>
-                item.id === runId
-                  ? { ...item, status: runState.status, duration: finalDuration, nodeExecutions: runState.nodeExecutions }
-                  : item
-              )
-            );
-
-            const liveNodes = useWorkflowStore.getState().nodes;
-            const liveEdges = useWorkflowStore.getState().edges;
-            const executions = runState.nodeExecutions || [];
-
-            const updatedNodes = liveNodes.map((node) => {
-              const exec = executions.find((e: any) => e.nodeId === node.id);
-              if (!exec) return node;
-
-              if (exec.status === 'SUCCESS') {
-                return {
-                  ...node,
-                  data: {
-                    ...node.data,
-                    isRunning: false,
-                    duration: exec.duration,
-                    ...(node.type === 'gemini' && { response: exec.output?.response || '' }),
-                    ...(node.type === 'cropImage' && { output: exec.output || {} }),
-                    ...(node.type === 'response' && { result: exec.output?.result || '' }),
-                    ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
-                  }
-                };
-              } else if (exec.status === 'FAILED') {
-                return {
-                  ...node,
-                  data: {
-                    ...node.data,
-                    isRunning: false,
-                    duration: exec.duration,
-                    error: exec.errorMessage || 'Execution failed'
-                  }
-                };
-              }
-              return node;
-            });
-
-            const updatedEdges = liveEdges.map((e) => ({ ...e, data: { isRunning: false } }));
-
-            useWorkflowStore.setState({
-              nodes: updatedNodes,
-              edges: updatedEdges,
-            });
-          } else {
-            const currentDuration = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
-            setRunHistory((prev) =>
-              prev.map((item) =>
-                item.id === runId
-                  ? { ...item, status: runState.status, duration: currentDuration, nodeExecutions: runState.nodeExecutions }
-                  : item
-              )
-            );
-
-            const executions = runState.nodeExecutions || [];
-            const liveNodes = useWorkflowStore.getState().nodes;
-            const liveEdges = useWorkflowStore.getState().edges;
-
-            const updatedNodes = liveNodes.map((node) => {
-              const exec = executions.find((e: any) => e.nodeId === node.id);
-              if (!exec) return node;
-
-              if (exec.status === 'RUNNING') {
-                return { ...node, data: { ...node.data, isRunning: true } };
-              } else if (exec.status === 'SUCCESS') {
-                return {
-                  ...node,
-                  data: {
-                    ...node.data,
-                    isRunning: false,
-                    duration: exec.duration,
-                    ...(node.type === 'gemini' && { response: exec.output?.response || '' }),
-                    ...(node.type === 'cropImage' && { output: exec.output || {} }),
-                    ...(node.type === 'response' && { result: exec.output?.result || '' }),
-                    ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
-                  }
-                };
-              } else if (exec.status === 'FAILED') {
-                return {
-                  ...node,
-                  data: {
-                    ...node.data,
-                    isRunning: false,
-                    duration: exec.duration,
-                    error: exec.errorMessage || 'Execution failed'
-                  }
-                };
-              }
-              return node;
-            });
-
-            const updatedEdges = liveEdges.map((e) => {
-              const sourceExec = executions.find((ex: any) => ex.nodeId === e.source);
-              const targetExec = executions.find((ex: any) => ex.nodeId === e.target);
-              const isEdgeActive = sourceExec?.status === 'SUCCESS' && (targetExec?.status === 'RUNNING' || targetExec?.status === 'PENDING');
-              return { ...e, data: { isRunning: isEdgeActive } };
-            });
-
-            useWorkflowStore.setState({
-              nodes: updatedNodes,
-              edges: updatedEdges,
-            });
-
-            if (pollActiveRef.current) setTimeout(poll, 800);
-          }
-        } catch (pollErr) {
-          console.error('Error polling execution status:', pollErr);
-          if (pollActiveRef.current) setTimeout(poll, 800);
-        }
-      };
-      poll();
+      // Start Zustand store polling
+      useWorkflowStore.getState().startPolling(runId);
     } catch (err) {
       console.error('Trigger workflow execution failed:', err);
       alert('Failed to start workflow execution.');
       setIsExecuting(false);
+      isExecutingRef.current = false;
       pollActiveRef.current = false;
       isStartingRunRef.current = false;
+    } finally {
+      isTriggeringRef.current = false;
     }
   };
 
@@ -872,7 +837,7 @@ export default function WorkflowBuilderPage() {
 
         {/* Play / Stop button — indigo-purple play, red stop with cross icon */}
         <button
-          onClick={isExecuting ? handleStopWorkflow : () => handleRunWorkflow()}
+          onClick={isExecuting ? handleStopWorkflow : (e) => handleRunWorkflow(e)}
           className={`w-9 h-9 rounded-lg flex items-center justify-center shadow-sm transition-all duration-200 text-white ${isExecuting
               ? 'bg-red-500 hover:bg-red-600'
               : 'bg-indigo-600 hover:bg-indigo-700'

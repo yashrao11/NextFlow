@@ -1,20 +1,32 @@
 import { task } from "@trigger.dev/sdk/v3";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import fs from "fs";
 
 /**
  * Trigger.dev task for running Gemini model prompt instructions.
  * Orchestrates calls to Google's Generative AI API with fallback support.
  * Uses a fully structured Parts array of Part objects to prevent 400 Bad Request error.
+ *
+ * Images may be provided as:
+ *  - { __inline: "data:image/..." }  — small/URL images passed directly
+ *  - { __filePath: "/tmp/..." }      — large images offloaded to local disk by the server
  */
 export const geminiPromptTask = task({
   id: "gemini-prompt",
   run: async (payload: {
     prompt: string;
     systemPrompt?: string;
-    images?: string[];
+    /** Each element is either { __inline: string } (base64/URL) or { __filePath: string } (temp file) */
+    images?: Array<{ __inline?: string; __filePath?: string } | string>;
     video?: { data: string; type: string };
+    videoFilePath?: string;
+    videoType?: string;
     audio?: { data: string; type: string };
+    audioFilePath?: string;
+    audioType?: string;
     file?: { data: string; type: string };
+    fileFilePath?: string;
+    fileType?: string;
     model?: string;
   }) => {
     const apiKey = process.env.GEMINI_API_KEY || "";
@@ -59,75 +71,99 @@ export const geminiPromptTask = task({
       { text: payload.prompt }
     ];
 
+    // Helper to read base64 from either a temp file or an inline data URL
+    const resolveBase64 = (filePath: string | undefined, inlineData: string | undefined): string | null => {
+      if (filePath) {
+        try {
+          const buf = fs.readFileSync(filePath);
+          try { fs.unlinkSync(filePath); } catch (_) {}
+          return buf.toString("base64");
+        } catch (err) {
+          console.error("[DEBUG] Failed to read temp file:", filePath, err);
+          return null;
+        }
+      }
+      if (inlineData) {
+        return inlineData.includes(",") ? inlineData.split(",")[1] : inlineData;
+      }
+      return null;
+    };
+
     // 2. Assemble connected Images (if any) as inlineData Part objects
     if (payload.images && payload.images.length > 0) {
-      for (const imgUrl of payload.images) {
+      for (const imgEntry of payload.images) {
         try {
-          if (imgUrl.startsWith('data:image/')) {
-            let cleanBase64 = imgUrl;
-            if (cleanBase64.includes(',')) {
-              cleanBase64 = cleanBase64.split(',')[1];
+          let base64: string | null = null;
+          let mimeType = "image/png";
+
+          if (typeof imgEntry === "string") {
+            // Legacy: plain string URL or base64
+            if (imgEntry.startsWith("data:image/")) {
+              const [header, data] = imgEntry.split(",");
+              mimeType = header.split(";")[0].split(":")[1] || "image/png";
+              base64 = data;
+            } else if (imgEntry.startsWith("http")) {
+              const response = await fetch(imgEntry);
+              const buffer = await response.arrayBuffer();
+              base64 = Buffer.from(buffer).toString("base64");
+              mimeType = "image/jpeg";
             }
-            parts.push({
-              inlineData: {
-                data: cleanBase64,
-                mimeType: 'image/png'
-              }
-            });
-          } else {
-            const response = await fetch(imgUrl);
-            const buffer = await response.arrayBuffer();
-            parts.push({
-              inlineData: {
-                data: Buffer.from(buffer).toString("base64"),
-                mimeType: "image/jpeg"
-              }
-            });
+          } else if ("__filePath" in imgEntry && imgEntry.__filePath) {
+            base64 = resolveBase64(imgEntry.__filePath, undefined);
+          } else if ("__inline" in imgEntry && imgEntry.__inline) {
+            const inline = imgEntry.__inline;
+            if (inline.startsWith("data:image/")) {
+              const [header, data] = inline.split(",");
+              mimeType = header.split(";")[0].split(":")[1] || "image/png";
+              base64 = data;
+            } else if (inline.startsWith("http")) {
+              const response = await fetch(inline);
+              const buffer = await response.arrayBuffer();
+              base64 = Buffer.from(buffer).toString("base64");
+              mimeType = "image/jpeg";
+            } else {
+              base64 = inline;
+            }
+          }
+
+          if (base64) {
+            parts.push({ inlineData: { data: base64, mimeType } });
           }
         } catch (fetchErr) {
-          console.error("Failed to fetch image:", imgUrl, fetchErr);
+          console.error("[DEBUG] Failed to process image:", fetchErr);
         }
       }
     }
 
     // 3. Assemble connected Videos (if any) as inlineData Part objects
-    if (payload.video && payload.video.data) {
-      let cleanBase64 = payload.video.data;
-      if (cleanBase64.includes(',')) {
-        cleanBase64 = cleanBase64.split(',')[1];
-      }
+    const videoBase64 = resolveBase64(payload.videoFilePath, payload.video?.data);
+    if (videoBase64) {
       parts.push({
         inlineData: {
-          data: cleanBase64,
-          mimeType: payload.video.type || 'video/mp4'
+          data: videoBase64,
+          mimeType: payload.videoType || payload.video?.type || "video/mp4"
         }
       });
     }
 
     // 4. Assemble connected Audio (if any) as inlineData Part objects
-    if (payload.audio && payload.audio.data) {
-      let cleanBase64 = payload.audio.data;
-      if (cleanBase64.includes(',')) {
-        cleanBase64 = cleanBase64.split(',')[1];
-      }
+    const audioBase64 = resolveBase64(payload.audioFilePath, payload.audio?.data);
+    if (audioBase64) {
       parts.push({
         inlineData: {
-          data: cleanBase64,
-          mimeType: payload.audio.type || 'audio/mp3'
+          data: audioBase64,
+          mimeType: payload.audioType || payload.audio?.type || "audio/mp3"
         }
       });
     }
 
     // 5. Assemble other files/documents like PDFs (if any) as inlineData Part objects
-    if (payload.file && payload.file.data) {
-      let cleanBase64 = payload.file.data;
-      if (cleanBase64.includes(',')) {
-        cleanBase64 = cleanBase64.split(',')[1];
-      }
+    const fileBase64 = resolveBase64(payload.fileFilePath, payload.file?.data);
+    if (fileBase64) {
       parts.push({
         inlineData: {
-          data: cleanBase64,
-          mimeType: payload.file.type || 'application/pdf'
+          data: fileBase64,
+          mimeType: payload.fileType || payload.file?.type || "application/pdf"
         }
       });
     }
@@ -154,7 +190,7 @@ export const geminiPromptTask = task({
 
     // Throw the final API error if all candidates failed to execute
     if (!responseText && lastError) {
-      throw lastError; 
+      throw lastError;
     }
 
     return { response: responseText };

@@ -28,6 +28,8 @@ interface WorkflowState {
   undoStack: CanvasState[]; // Holds historical snapshots for the 'undo' operation
   redoStack: CanvasState[]; // Holds historical snapshots for the 'redo' operation
   notification: { message: string; type: 'error' | 'success' | 'warning' } | null; // Toast alert state
+  isRunning: boolean;
+  pollingIntervalId: any;
   setNodes: (nodes: Node[]) => void;
   setEdges: (edges: Edge[]) => void;
   addNode: (node: Node) => void;
@@ -41,6 +43,9 @@ interface WorkflowState {
   isConnectionValid: (connection: Connection) => boolean;
   showNotification: (message: string, type?: 'error' | 'success' | 'warning') => void;
   clearNotification: () => void;
+  setIsRunning: (isRunning: boolean) => void;
+  startPolling: (runId: string) => void;
+  stopPolling: () => void;
 }
 
 export const useWorkflowStore = create<WorkflowState>((set, get) => ({
@@ -49,6 +54,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   undoStack: [],
   redoStack: [],
   notification: null,
+  isRunning: false,
+  pollingIntervalId: null,
+
+  setIsRunning: (isRunning) => {
+    set({ isRunning });
+  },
 
   /** Sets the current nodes array state. */
   setNodes: (nodes) => {
@@ -327,6 +338,114 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       clearTimeout((globalThis as any).__notificationTimeout);
     }
     set({ notification: null });
+  },
+
+  startPolling: (runId) => {
+    const existingInterval = get().pollingIntervalId;
+    if (existingInterval) {
+      clearInterval(existingInterval);
+    }
+
+    set({ isRunning: true });
+
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/runs/${runId}`);
+        if (!res.ok) {
+          throw new Error('Failed to fetch run status');
+        }
+        const run = await res.json();
+        const runFinished = run.status === 'SUCCESS' || run.status === 'FAILED';
+
+        // Update nodes and edges based on dynamic executions
+        const executions = run.nodeExecutions || [];
+        const liveNodes = get().nodes;
+        const liveEdges = get().edges;
+
+        const updatedNodes = liveNodes.map((node) => {
+          const exec = executions.find((e: any) => e.nodeId === node.id);
+          if (!exec) return node;
+
+          if (exec.status === 'RUNNING') {
+            return { ...node, data: { ...node.data, isRunning: true } };
+          } else if (exec.status === 'SUCCESS') {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                isRunning: false,
+                duration: exec.duration,
+                ...(node.type === 'gemini' && { response: exec.output?.response || '', output: exec.output || {} }),
+                ...(node.type === 'cropImage' && { output: exec.output || {} }),
+                ...(node.type === 'response' && {
+                  result: exec.output?.result || '',
+                  output: exec.output || {},
+                  inputs: {
+                    ...node.data.inputs,
+                    result: exec.output?.result || '',
+                  }
+                }),
+                ...(node.type === 'requestInputs' && { fields: exec.output?.fields || [] }),
+              }
+            };
+          } else if (exec.status === 'FAILED') {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                isRunning: false,
+                duration: exec.duration,
+                error: exec.errorMessage || 'Execution failed'
+              }
+            };
+          }
+          return node;
+        });
+
+        const updatedEdges = liveEdges.map((e) => {
+          if (runFinished) {
+            return { ...e, data: { ...e.data, isRunning: false } };
+          }
+          const sourceExec = executions.find((ex: any) => ex.nodeId === e.source);
+          const targetExec = executions.find((ex: any) => ex.nodeId === e.target);
+          const isEdgeActive = sourceExec?.status === 'SUCCESS' && (targetExec?.status === 'RUNNING' || targetExec?.status === 'PENDING');
+          return { ...e, data: { ...e.data, isRunning: isEdgeActive } };
+        });
+
+        if (runFinished) {
+          const currentInterval = get().pollingIntervalId;
+          if (currentInterval) {
+            clearInterval(currentInterval);
+          }
+          set({
+            isRunning: false,
+            pollingIntervalId: null,
+            nodes: updatedNodes,
+            edges: updatedEdges,
+          });
+        } else {
+          set({
+            nodes: updatedNodes,
+            edges: updatedEdges,
+          });
+        }
+      } catch (err) {
+        console.error('Zustand polling error:', err);
+      }
+    }, 1500);
+
+    set({ pollingIntervalId: intervalId });
+  },
+
+  stopPolling: () => {
+    const intervalId = get().pollingIntervalId;
+    if (intervalId) {
+      clearInterval(intervalId);
+    }
+    set({
+      isRunning: false,
+      pollingIntervalId: null,
+    });
   },
 }));
 

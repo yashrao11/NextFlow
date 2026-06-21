@@ -904,8 +904,8 @@ export function CropImageNode({ id, data }: NodeProps) {
               <img
                 src={data.output.imageUrl}
                 alt="Cropped Output Preview"
-                style={{ width: `${crop.width}%` }}
                 className="max-w-full h-auto object-contain rounded"
+                style={{ width: `${crop.width}%` }}
               />
             ) : (
               <span className="text-[11px] text-zinc-400 font-semibold italic">No output yet</span>

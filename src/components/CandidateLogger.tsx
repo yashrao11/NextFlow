@@ -13,7 +13,7 @@ export default function CandidateLogger() {
   useEffect(() => {
     // Prevent duplicate logs from React StrictMode double invocation
     if (!logged.current) {
-      console.log("[NextFlow] Candidate LinkedIn: https://www.linkedin.com/in/yash-rao-75891316b");
+      console.log("[NextFlow] Candidate LinkedIn: https://www.linkedin.com/in/yashrao11");
       logged.current = true;
     }
   }, []);

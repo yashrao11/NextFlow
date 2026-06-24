@@ -127,25 +127,39 @@ async function pollTriggerRun(
     return { output: result };
   }
 
-  // Increased attempts to allow for mandatory 30-second delay tasks
-  const maxAttempts = 40; 
-  const delayMs = 2000;
+  // Poll every 500ms with a 300-attempt (150s) budget.
+  // This ensures we detect Trigger.dev completion within ~500ms of it finishing,
+  // rather than timing out at 80s (40 × 2s) and firing the expensive local fallback.
+  const maxAttempts = 300;
+  const delayMs = 500;
+
+  // QUEUED-state timeout: if the task sits in QUEUED for longer than this many
+  // consecutive attempts with no machine picking it up, immediately fall back to
+  // local execution. This converts the old 10-minute "Expired" wait into a ~20s
+  // transparent recovery when the trigger.dev dev worker is not running.
+  // 40 attempts × 500ms = 20 seconds of patience before giving up on the worker.
+  const MAX_QUEUED_ATTEMPTS = 40;
+  let queuedAttempts = 0;
 
   // Poll status periodically until completion or failure
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      // Check if the database run was aborted by the user
-      const dbRun = await prisma.run.findUnique({
-        where: { id: dbRunId },
-        select: { status: true }
-      });
-      if (dbRun && dbRun.status === 'FAILED') {
-        try {
-          await runs.cancel(triggerRunId);
-        } catch (cancelErr) {
-          console.warn(`[Run Poller] Failed to cancel Trigger.dev run ${triggerRunId}:`, cancelErr);
+      // Throttle DB abort-check: only query every 10 iterations (~5s cadence).
+      // Previously this ran on every 2s iteration, causing ~40 unnecessary Prisma
+      // round-trips per execution. Now it fires ~30 times over the 150s window.
+      if (attempt % 10 === 0) {
+        const dbRun = await prisma.run.findUnique({
+          where: { id: dbRunId },
+          select: { status: true }
+        });
+        if (dbRun && dbRun.status === 'FAILED') {
+          try {
+            await runs.cancel(triggerRunId);
+          } catch (cancelErr) {
+            console.warn(`[Run Poller] Failed to cancel Trigger.dev run ${triggerRunId}:`, cancelErr);
+          }
+          throw new Error('Task execution aborted: Run stopped by user.');
         }
-        throw new Error('Task execution aborted: Run stopped by user.');
       }
 
       const run = await runs.retrieve(triggerRunId);
@@ -153,6 +167,7 @@ async function pollTriggerRun(
       if (run) {
         if (run.status === 'COMPLETED') {
           const durationInSeconds = run.durationMs ? run.durationMs / 1000 : undefined;
+          console.log(`[Run Poller] Trigger.dev task ${triggerRunId} completed. Detected on attempt ${attempt + 1} (~${((attempt * delayMs) / 1000).toFixed(1)}s after polling started).`);
           return { output: run.output, durationInSeconds };
         } else if (
           run.status === 'FAILED' ||
@@ -168,6 +183,37 @@ async function pollTriggerRun(
           );
           const fallbackResult = await fallbackTask();
           return { output: fallbackResult };
+        } else if (
+          run.status === 'SYSTEM_FAILURE' ||
+          run.status === 'PENDING_VERSION'
+        ) {
+          // SYSTEM_FAILURE: trigger.dev infra error with no chance of recovery.
+          // PENDING_VERSION: no deployed task version exists to run this task.
+          // In both cases fall back to local execution immediately.
+          console.warn(
+            `[Run Poller] Trigger.dev task ${triggerRunId} has status ${run.status} — ` +
+            `cannot execute remotely. Falling back to local execution immediately.`
+          );
+          const fallbackResult = await fallbackTask();
+          return { output: fallbackResult };
+        } else if (run.status === 'QUEUED') {
+          // Task is waiting for a local dev worker to connect.
+          // Count consecutive QUEUED iterations and bail out after MAX_QUEUED_ATTEMPTS
+          // so we don't wait 10 minutes for a machine that may never arrive.
+          queuedAttempts++;
+          if (queuedAttempts >= MAX_QUEUED_ATTEMPTS) {
+            console.warn(
+              `[Run Poller] Task ${triggerRunId} has been QUEUED for ${((queuedAttempts * delayMs) / 1000).toFixed(0)}s ` +
+              `with "No machine yet". The trigger.dev dev worker is likely not running. ` +
+              `Falling back to local execution immediately.`
+            );
+            const fallbackResult = await fallbackTask();
+            return { output: fallbackResult };
+          }
+        } else {
+          // Task is EXECUTING or in any other active state — reset the QUEUED counter
+          // so a brief re-queue between retries doesn't trigger a false fallback.
+          queuedAttempts = 0;
         }
       }
     } catch (err: any) {
@@ -187,12 +233,12 @@ async function pollTriggerRun(
 /**
  * localCropFallback
  * Performs synchronous image cropping using Jimp on the local server.
- * Simulates a background worker execution with a mandatory 30-second sleep.
+ * This fires only when Trigger.dev polling exhausts its budget or the task fails.
+ * The 30-second delay belongs in the Trigger.dev task (cropImage.ts) — NOT here.
+ * Keeping a sleep here would add 30+ extra seconds on top of an already-slow fallback path.
  */
 async function localCropFallback(imageUrl: string, x: number, y: number, width: number, height: number): Promise<any> {
   console.log("[DEBUG] Local fallback: Starting crop using Jimp.", { imageUrl: imageUrl.substring(0, 50), x, y, width, height });
-  // Mandatory 30-second artificial delay to simulate a complex background job
-  await new Promise((resolve) => setTimeout(resolve, 30000));
   try {
     let inputBuffer: Buffer | string = imageUrl;
     if (imageUrl.startsWith("data:image/")) {
@@ -853,19 +899,18 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
                 height: typeof cropData.height === 'number' ? cropData.height : 100,
               };
 
-              // Off-load large base64 images to a local temp file so the trigger.dev
-              // cloud message payload stays small (file path vs multi-MB base64).
-              // The trigger task (running locally via `npx trigger.dev dev`) reads directly
-              // from disk — no cloud relay bottleneck.
-              const LARGE_THRESHOLD = 1024; // anything > 1 KB is treated as binary
-              const cropPayload: any = { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
-              if (imageUrlVal.startsWith('data:image/') && imageUrlVal.length > LARGE_THRESHOLD) {
-                const ext = imageUrlVal.split(';')[0].split('/')[1] || 'png';
-                cropPayload.imageFilePath = storeImageTemp(imageUrlVal, ext);
-                cropPayload.imageUrl = ''; // empty — task will read from file
-              } else {
-                cropPayload.imageUrl = imageUrlVal;
-              }
+              // Always pass imageUrl directly in the payload.
+              // The previous file-path optimization (storeImageTemp) only worked in local dev
+              // where the Next.js server and the trigger.dev worker shared the same filesystem.
+              // On Vercel + Trigger.dev cloud, they run on DIFFERENT machines — file paths are
+              // meaningless to the cloud worker and caused silent image failures.
+              const cropPayload: any = {
+                x: crop.x,
+                y: crop.y,
+                width: crop.width,
+                height: crop.height,
+                imageUrl: imageUrlVal,
+              };
 
               // Trigger async crop task using Trigger.dev v3
               const triggerRun = await tasks.trigger('crop-image', cropPayload);
@@ -887,48 +932,29 @@ async function executeWorkflowBackground(runId: string, nodesToExecute: any[], e
               const audio = resolvedInputs.audio || node.data?.uploadedAudio || null;
               const file = resolvedInputs.file || node.data?.uploadedFile || null;
 
-              const LARGE_THRESHOLD = 1024;
+              // Always pass data directly in the trigger payload.
+              // The previous file-path optimization (storeImageTemp) only worked in local dev
+              // where the Next.js server and trigger.dev worker shared the same filesystem.
+              // On Vercel + Trigger.dev cloud, they are DIFFERENT machines — file paths written
+              // by Vercel are inaccessible to Trigger.dev cloud workers, causing silent failures.
               const triggerPayload: any = {
                 prompt: promptVal,
                 systemPrompt: systemPromptVal,
-                // For each image: if it's a large base64 data URL, write to a temp file
-                // and pass the path. The gemini trigger task reads from disk.
-                images: images.map((img: string) => {
-                  if (img.startsWith('data:image/') && img.length > LARGE_THRESHOLD) {
-                    const ext = img.split(';')[0].split('/')[1] || 'png';
-                    return { __filePath: storeImageTemp(img, ext) };
-                  }
-                  return { __inline: img };
-                }),
+                images: images.map((img: string) => ({ __inline: img })),
                 model: node.data?.model || 'Gemini 3.1 Pro',
               };
 
               if (video) {
                 const v = typeof video === 'string' ? { data: video, type: 'video/mp4' } : { data: video.data, type: video.type };
-                if (v.data.startsWith('data:') && v.data.length > LARGE_THRESHOLD) {
-                  triggerPayload.videoFilePath = storeImageTemp(v.data, v.type.split('/')[1] || 'mp4');
-                  triggerPayload.videoType = v.type;
-                } else {
-                  triggerPayload.video = v;
-                }
+                triggerPayload.video = v;
               }
               if (audio) {
                 const a = typeof audio === 'string' ? { data: audio, type: 'audio/mp3' } : { data: audio.data, type: audio.type };
-                if (a.data.startsWith('data:') && a.data.length > LARGE_THRESHOLD) {
-                  triggerPayload.audioFilePath = storeImageTemp(a.data, a.type.split('/')[1] || 'mp3');
-                  triggerPayload.audioType = a.type;
-                } else {
-                  triggerPayload.audio = a;
-                }
+                triggerPayload.audio = a;
               }
               if (file) {
                 const f = typeof file === 'string' ? { data: file, type: 'application/pdf' } : { data: file.data, type: file.type };
-                if (f.data.startsWith('data:') && f.data.length > LARGE_THRESHOLD) {
-                  triggerPayload.fileFilePath = storeImageTemp(f.data, 'bin');
-                  triggerPayload.fileType = f.type;
-                } else {
-                  triggerPayload.file = f;
-                }
+                triggerPayload.file = f;
               }
 
               // Trigger async Gemini prompt task using Trigger.dev v3

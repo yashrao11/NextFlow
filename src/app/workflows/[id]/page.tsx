@@ -183,7 +183,15 @@ export default function WorkflowBuilderPage() {
           const exec = executions.find((e: any) => e.nodeId === node.id);
           if (!exec) return node;
 
+          // When the overall run is finished (SUCCESS or FAILED), force every node's
+          // isRunning flag off — even if that node's DB exec row is still 'RUNNING'
+          // (which can happen when the server marks the run done before the last
+          // nodeExecution update propagates). This prevents nodes staying stuck
+          // shining after the run has fully ended.
           if (exec.status === 'RUNNING') {
+            if (runFinished) {
+              return { ...node, data: { ...node.data, isRunning: false } };
+            }
             return { ...node, data: { ...node.data, isRunning: true } };
           } else if (exec.status === 'SUCCESS') {
             return {
@@ -662,6 +670,34 @@ export default function WorkflowBuilderPage() {
     if (isRunning || isTriggeringRef.current || isExecutingRef.current) return;
 
     const actualTargetNodeId = typeof e === 'string' ? e : targetNodeId;
+
+    // If this is an unsaved workflow (id === 'new'), provision it in the DB first
+    // so we have a real ID to run against. The auto-save PUT to /api/workflows/new
+    // would 404 otherwise, making the run button appear broken on new workflows.
+    if (id === 'new') {
+      try {
+        const createRes = await fetch('/api/workflows', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!createRes.ok) throw new Error('Failed to create workflow');
+        const created = await createRes.json();
+        // Save nodes + edges into the newly created record
+        await fetch(`/api/workflows/${created.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes, edges }),
+        });
+        // Redirect to the real workflow URL so everything uses the correct ID going forward
+        router.replace(`/workflows/${created.id}`);
+        return; // The page will remount with the real ID — the user can press Run again
+      } catch (err) {
+        console.error('Failed to auto-provision new workflow before run:', err);
+        alert('Failed to save workflow before running. Please try again.');
+        return;
+      }
+    }
 
     isExecutingRef.current = true;
     isStartingRunRef.current = true;

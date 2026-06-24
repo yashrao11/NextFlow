@@ -23,6 +23,8 @@ import {
   Wallet,
   PanelLeft,
   Save,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { useWorkflowStore } from '@/store/useWorkflowStore';
 import WorkflowCanvas from '@/components/canvas/WorkflowCanvas';
@@ -40,6 +42,7 @@ interface RunHistoryItem {
 
 function NodeExecutionRow({ nodeExecution }: { nodeExecution: any }) {
   const [elapsed, setElapsed] = useState<number>(0);
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
 
   useEffect(() => {
     if (nodeExecution.status !== 'RUNNING') {
@@ -81,13 +84,182 @@ function NodeExecutionRow({ nodeExecution }: { nodeExecution: any }) {
     ? `${elapsed.toFixed(1)}s`
     : `${(nodeExecution.duration || 0).toFixed(1)}s`;
 
+  // Parse inputs and outputs safely
+  let inputs: any = {};
+  let output: any = {};
+  try {
+    inputs = typeof nodeExecution.inputs === 'string'
+      ? JSON.parse(nodeExecution.inputs)
+      : (nodeExecution.inputs || {});
+  } catch (e) {
+    inputs = nodeExecution.inputs || {};
+  }
+  try {
+    output = typeof nodeExecution.output === 'string'
+      ? JSON.parse(nodeExecution.output)
+      : (nodeExecution.output || {});
+  } catch (e) {
+    output = nodeExecution.output || {};
+  }
+
+  // Determine if we have any actual data to display
+  const hasInputs = inputs && typeof inputs === 'object' && Object.keys(inputs).length > 0;
+  const hasOutput = output && typeof output === 'object' && Object.keys(output).length > 0;
+  const hasError = !!nodeExecution.errorMessage;
+  const canExpand = hasInputs || hasOutput || hasError;
+
   return (
-    <div className="flex items-center justify-between text-[10px] text-zinc-500">
-      <div className="flex items-center gap-1.5">
-        <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
-        <span className={statusColor}>{friendlyName}</span>
+    <div className="flex flex-col border border-zinc-150 rounded-lg bg-white overflow-hidden shadow-[0_1px_2px_rgba(0,0,0,0.02)] transition-all">
+      <div
+        onClick={() => {
+          if (canExpand) {
+            setIsExpanded(!isExpanded);
+          }
+        }}
+        className={`flex items-center justify-between px-2.5 py-2 select-none ${
+          canExpand ? 'cursor-pointer hover:bg-zinc-50/80 active:bg-zinc-100/50' : ''
+        }`}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          {canExpand && (
+            <span className="text-zinc-400 shrink-0">
+              {isExpanded ? (
+                <ChevronDown className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5" />
+              )}
+            </span>
+          )}
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot}`} />
+          <span className={`text-[10px] truncate ${statusColor}`}>{friendlyName}</span>
+        </div>
+        <span className="font-mono text-[9px] text-zinc-450 shrink-0">{displayDuration}</span>
       </div>
-      <span className="font-mono text-zinc-450">{displayDuration}</span>
+
+      {isExpanded && canExpand && (
+        <div className="px-3 pb-3 pt-1.5 border-t border-zinc-100 bg-zinc-50/50 text-[10px] text-zinc-600 space-y-2.5 animate-slide-in">
+          {/* Inputs Section */}
+          {hasInputs && (
+            <div className="space-y-1">
+              <div className="font-bold text-zinc-700 tracking-wider text-[8px] uppercase">Inputs</div>
+              <div className="bg-white border border-zinc-200/60 rounded p-1.5 space-y-1.5 font-mono break-all text-[9px]">
+                {nodeExecution.nodeName === 'gemini' && (
+                  <>
+                    {inputs.model && <div><span className="text-zinc-400 font-semibold">model:</span> {inputs.model}</div>}
+                    {inputs.prompt && <div className="whitespace-pre-wrap"><span className="text-zinc-400 font-semibold">prompt:</span> {inputs.prompt}</div>}
+                    {inputs.systemPrompt && <div className="whitespace-pre-wrap"><span className="text-zinc-400 font-semibold">systemPrompt:</span> {inputs.systemPrompt}</div>}
+                  </>
+                )}
+                {nodeExecution.nodeName === 'cropImage' && (
+                  <>
+                    {inputs.imageUrl && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-zinc-400 font-semibold">imageUrl:</span>
+                        {inputs.imageUrl.startsWith('data:image/') ? (
+                          <img
+                            src={inputs.imageUrl}
+                            alt="Crop Input"
+                            className="max-h-20 w-auto object-contain border border-zinc-200 rounded self-start"
+                          />
+                        ) : (
+                          <span className="truncate max-w-full text-blue-600 underline cursor-pointer" onClick={() => window.open(inputs.imageUrl, '_blank')}>
+                            {inputs.imageUrl}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {inputs.crop && (
+                      <div>
+                        <span className="text-zinc-400 font-semibold">bounds:</span> X:{inputs.crop.x}%, Y:{inputs.crop.y}%, W:{inputs.crop.width}%, H:{inputs.crop.height}%
+                      </div>
+                    )}
+                  </>
+                )}
+                {nodeExecution.nodeName === 'requestInputs' && (
+                  <>
+                    {inputs.fields && Array.isArray(inputs.fields) ? (
+                      inputs.fields.map((f: any) => (
+                        <div key={f.id || f.name}>
+                          <span className="text-zinc-400 font-semibold">{f.name || f.label || 'field'}:</span> {f.value || '(empty)'}
+                        </div>
+                      ))
+                    ) : (
+                      <div>{JSON.stringify(inputs)}</div>
+                    )}
+                  </>
+                )}
+                {nodeExecution.nodeName === 'response' && (
+                  <>
+                    {inputs.result && <div className="whitespace-pre-wrap"><span className="text-zinc-400 font-semibold">result:</span> {inputs.result}</div>}
+                  </>
+                )}
+                {!['gemini', 'cropImage', 'requestInputs', 'response'].includes(nodeExecution.nodeName) && (
+                  <div>{JSON.stringify(inputs)}</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Output Section */}
+          {hasOutput && (
+            <div className="space-y-1">
+              <div className="font-bold text-zinc-700 tracking-wider text-[8px] uppercase">Output</div>
+              <div className="bg-white border border-zinc-200/60 rounded p-1.5 space-y-1.5 font-mono break-all text-[9px]">
+                {nodeExecution.nodeName === 'gemini' && (
+                  <>
+                    {output.response && <div className="whitespace-pre-wrap text-zinc-800 font-sans text-[9.5px] leading-relaxed">{output.response}</div>}
+                  </>
+                )}
+                {nodeExecution.nodeName === 'cropImage' && (
+                  <>
+                    {(output.imageUrl || output.croppedUrl) && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-zinc-400 font-semibold">croppedImage:</span>
+                        <img
+                          src={output.imageUrl || output.croppedUrl}
+                          alt="Cropped Output"
+                          className="max-h-24 w-auto object-contain border border-zinc-200 rounded self-start shadow-sm"
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+                {nodeExecution.nodeName === 'requestInputs' && (
+                  <>
+                    {output.fields && Array.isArray(output.fields) ? (
+                      output.fields.map((f: any) => (
+                        <div key={f.id || f.name}>
+                          <span className="text-zinc-400 font-semibold">{f.name || f.label || 'field'}:</span> {f.value || '(empty)'}
+                        </div>
+                      ))
+                    ) : (
+                      <div>{JSON.stringify(output)}</div>
+                    )}
+                  </>
+                )}
+                {nodeExecution.nodeName === 'response' && (
+                  <>
+                    {output.result && <div className="whitespace-pre-wrap text-zinc-800 font-sans text-[9.5px] leading-relaxed">{output.result}</div>}
+                  </>
+                )}
+                {!['gemini', 'cropImage', 'requestInputs', 'response'].includes(nodeExecution.nodeName) && (
+                  <div>{JSON.stringify(output)}</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Error Section */}
+          {hasError && (
+            <div className="space-y-1">
+              <div className="font-bold text-rose-700 tracking-wider text-[8px] uppercase">Error</div>
+              <div className="bg-rose-50/50 border border-rose-200 rounded p-2 text-rose-700 font-mono text-[9px] whitespace-pre-wrap">
+                {nodeExecution.errorMessage}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

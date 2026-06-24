@@ -158,10 +158,19 @@ export default function WorkflowBuilderPage() {
     pollActiveRef.current = true;
 
     window.activePollInterval = setInterval(async () => {
+      // Guard: if stop was pressed while this tick was in-flight, discard the
+      // result entirely so a mid-flight fetch can't re-light nodes after they
+      // were cleared by handleStopWorkflow.
+      if (!pollActiveRef.current) return;
+
       try {
         const res = await fetch(`/api/runs/${runId}`);
         if (!res.ok) throw new Error('Failed to fetch run status');
         const data = await res.json();
+
+        // Second guard after the async fetch — stop may have been pressed while
+        // the network request was in-flight.
+        if (!pollActiveRef.current) return;
 
         const executions = data.nodeExecutions || [];
         const runFinished = data.status === 'SUCCESS' || data.status === 'FAILED';
@@ -587,13 +596,18 @@ export default function WorkflowBuilderPage() {
     }
     activeUiRunIdRef.current = null;
 
-    // Clear canvas node running states immediately
+    // Clear ALL canvas node and edge running states atomically in one setState call.
+    // Previously this used forEach + individual updateNodeData() calls which are
+    // non-atomic — an in-flight poll tick firing between calls could overwrite
+    // isRunning=false back to isRunning=true before the loop finished.
     const currentNodes = useWorkflowStore.getState().nodes;
-    currentNodes.forEach((n) => updateNodeData(n.id, { isRunning: false }));
-
     const currentEdges = useWorkflowStore.getState().edges;
     useWorkflowStore.setState({
-      edges: currentEdges.map((e) => ({ ...e, data: { isRunning: false } })),
+      nodes: currentNodes.map((n) => ({
+        ...n,
+        data: { ...n.data, isRunning: false },
+      })),
+      edges: currentEdges.map((e) => ({ ...e, data: { ...e.data, isRunning: false } })),
     });
 
     if (runIdToAbort) {
@@ -653,6 +667,11 @@ export default function WorkflowBuilderPage() {
     isStartingRunRef.current = true;
     setIsExecuting(true);
     pollActiveRef.current = true;
+
+    // Auto-open the execution history sidebar whenever a run starts so the
+    // user can immediately see the live node-by-node progress without having
+    // to manually click the clock icon.
+    setShowSidebar(true);
 
     const scope = actualTargetNodeId ? 'PARTIAL' : 'FULL';
 

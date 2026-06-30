@@ -1,4 +1,4 @@
-# NextFlow - LLM Workflow Builder (Galaxy.ai Clone)
+# NextFlow - LLM Workflow Builder
 
 **Live Demo URL**: [https://next-flow-topaz-theta.vercel.app/](https://next-flow-topaz-theta.vercel.app/)
 
